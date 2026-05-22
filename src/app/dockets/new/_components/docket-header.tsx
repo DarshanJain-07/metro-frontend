@@ -72,7 +72,6 @@ export function DocketHeader({ metadata }: DocketHeaderProps) {
                 </ComboboxItem>
               ))}
             </ComboboxList>
-            <ComboboxEmpty>No branches found.</ComboboxEmpty>
           </ComboboxContent>
         </Combobox>
       </div>
@@ -91,7 +90,6 @@ export function DocketHeader({ metadata }: DocketHeaderProps) {
                 </ComboboxItem>
               ))}
             </ComboboxList>
-            <ComboboxEmpty>No cities found.</ComboboxEmpty>
           </ComboboxContent>
         </Combobox>
       </div>

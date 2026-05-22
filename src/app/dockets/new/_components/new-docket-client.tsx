@@ -200,8 +200,9 @@ export function NewDocketClient() {
         router.refresh();
       }, 2000);
     } else {
-      setFormError(result.error);
-      toast.error(result.error);
+      const errorMessage = result.error || "An unknown error occurred";
+      setFormError(errorMessage);
+      toast.error(errorMessage);
       setIsSubmitting(false);
     }
   };
@@ -217,8 +218,34 @@ export function NewDocketClient() {
         <div className="bg-card text-card-foreground flex-1 flex flex-col lg:overflow-hidden">
           <form onSubmit={handleSubmit(onSubmit)} className="px-4 md:px-6 pt-4 pb-0 flex-1 flex flex-col gap-6 lg:overflow-hidden">
             {isLoadingMetadata || !metadata ? (
-              <div className="flex h-48 items-center justify-center text-sm text-muted-foreground">
-                Loading docket setup...
+              <div className="space-y-8 animate-in fade-in duration-500">
+                <div className="form-grid-8">
+                  {[...Array(8)].map((_, i) => (
+                    <div key={i} className="space-y-2">
+                      <div className="h-2 w-12 uber-loader animate-pulse rounded" />
+                      <div className="h-8 w-full uber-loader animate-pulse rounded-[var(--radius)]" />
+                    </div>
+                  ))}
+                </div>
+                <div className="form-grid-2">
+                  <div className="space-y-4">
+                    <div className="h-3 w-20 uber-loader animate-pulse rounded" />
+                    <div className="space-y-2">
+                      <div className="h-8 w-full uber-loader animate-pulse rounded-[var(--radius)]" />
+                      <div className="h-8 w-full uber-loader animate-pulse rounded-[var(--radius)]" />
+                    </div>
+                  </div>
+                  <div className="space-y-4">
+                    <div className="h-3 w-20 uber-loader animate-pulse rounded" />
+                    <div className="space-y-2">
+                      <div className="h-8 w-full uber-loader animate-pulse rounded-[var(--radius)]" />
+                      <div className="h-8 w-full uber-loader animate-pulse rounded-[var(--radius)]" />
+                    </div>
+                  </div>
+                </div>
+                <div className="border-t border-border pt-4">
+                  <div className="h-24 w-full uber-loader animate-pulse rounded-[var(--radius)]" />
+                </div>
               </div>
             ) : (
               <>
@@ -236,16 +263,12 @@ export function NewDocketClient() {
                     <AlertDescription>Docket has been created successfully. Redirecting...</AlertDescription>
                   </Alert>
                 )}
-                 {!isLoadingMetadata && metadata ? (
-                  <>
-                    <DocketHeader metadata={metadata} />
-                    <PartyInfo metadata={metadata} />
-                    <motion.div variants={itemVariants} className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-10 gap-6 lg:overflow-hidden border-t border-border pt-4">
-                      <LineItemsSection />
-                      <PaymentSection isSubmitting={isSubmitting} />
-                    </motion.div>
-                  </>
-                  ) : null}
+                <DocketHeader metadata={metadata} />
+                <PartyInfo metadata={metadata} />
+                <motion.div variants={itemVariants} className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-10 gap-6 lg:overflow-hidden border-t border-border pt-4">
+                  <LineItemsSection />
+                  <PaymentSection isSubmitting={isSubmitting} />
+                </motion.div>
               </>
             )}
           </form>

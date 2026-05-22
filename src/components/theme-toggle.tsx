@@ -21,12 +21,25 @@ export function ThemeToggle({ className }: ThemeToggleProps) {
 
   if (!mounted) return <div className={cn("w-8 h-8 shrink-0", className)} />;
 
+  const toggleTheme = () => {
+    const nextTheme = theme === "dark" ? "light" : "dark";
+
+    if (!document.startViewTransition) {
+      setTheme(nextTheme);
+      return;
+    }
+
+    document.startViewTransition(() => {
+      setTheme(nextTheme);
+    });
+  };
+
   return (
     <Button
       variant="ghost"
       size="icon"
       className={cn("h-8 w-8 transition-all duration-300 shrink-0", className)}
-      onClick={() => setTheme(theme === "dark" ? "light" : "dark")}
+      onClick={toggleTheme}
     >
       <Sun className="h-4 w-4 rotate-0 scale-100 transition-all dark:-rotate-90 dark:scale-0" />
       <Moon className="absolute h-4 w-4 rotate-90 scale-0 transition-all dark:rotate-0 dark:scale-100" />

@@ -56,7 +56,6 @@ export function PartyInfo({ metadata }: PartyInfoProps) {
                   {/* Placeholder for party list */}
                   <ComboboxItem value="Walk-in Customer">Walk-in Customer</ComboboxItem>
                 </ComboboxList>
-                <ComboboxEmpty>No parties found.</ComboboxEmpty>
               </ComboboxContent>
             </Combobox>
             <Button type="button" variant="ghost" className="h-8 text-xs font-bold text-foreground hover:bg-muted px-2 active-press">
@@ -80,7 +79,6 @@ export function PartyInfo({ metadata }: PartyInfoProps) {
                     </ComboboxItem>
                   ))}
                 </ComboboxList>
-                <ComboboxEmpty>No cities found.</ComboboxEmpty>
               </ComboboxContent>
             </Combobox>
             <StyledInput className="w-24" {...register("consignor_phone")} placeholder="Phone" />
@@ -107,7 +105,6 @@ export function PartyInfo({ metadata }: PartyInfoProps) {
                   {/* Placeholder for party list */}
                   <ComboboxItem value="Walk-in Customer">Walk-in Customer</ComboboxItem>
                 </ComboboxList>
-                <ComboboxEmpty>No parties found.</ComboboxEmpty>
               </ComboboxContent>
             </Combobox>
             <Button type="button" variant="ghost" className="h-8 text-xs font-bold text-foreground hover:bg-muted px-2 active-press">
@@ -131,7 +128,6 @@ export function PartyInfo({ metadata }: PartyInfoProps) {
                     </ComboboxItem>
                   ))}
                 </ComboboxList>
-                <ComboboxEmpty>No cities found.</ComboboxEmpty>
               </ComboboxContent>
             </Combobox>
             <StyledInput className="w-24" {...register("consignee_phone")} placeholder="Phone" />
