@@ -21,7 +21,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <Navbar />
       <div className="min-h-0 flex-1 flex overflow-hidden">
         <Sidebar />
-        <main className="min-h-0 flex-1 bg-[#373739] dark:bg-zinc-950/50 overflow-y-auto">
+        <main className="min-h-0 flex-1 bg-zinc-50 dark:bg-zinc-950/50 overflow-y-auto">
           {children}
         </main>
       </div>

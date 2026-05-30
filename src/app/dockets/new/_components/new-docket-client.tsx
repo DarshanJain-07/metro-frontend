@@ -5,7 +5,7 @@ import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import type { Variants } from "framer-motion";
-import { useForm, FormProvider, useWatch } from "react-hook-form";
+import { useForm, FormProvider, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { docketSchema, type DocketFormValues } from "../_lib/schema";
 import { createDocket } from "../_lib/actions";
@@ -26,7 +26,24 @@ export interface DocketMetadata {
   cities: Array<{
     id: number;
     name: string;
+    state: number;
     state_code: string | null;
+    state_name?: string | null;
+  }>;
+  states: Array<{
+    id: number;
+    name: string;
+    code: string;
+  }>;
+  parties: Array<{
+    id: number;
+    name: string;
+    phone: string;
+    address: string;
+    city: number;
+    city_name: string | null;
+    state_code: string | null;
+    gst_number: string | null;
   }>;
   user_branch: number | null;
 }
@@ -40,24 +57,30 @@ export function NewDocketClient() {
   const [isSuccess, setIsSuccess] = useState(false);
 
   const methods = useForm<DocketFormValues>({
-    resolver: zodResolver(docketSchema),
+    resolver: zodResolver(docketSchema) as Resolver<DocketFormValues>,
     defaultValues: {
       date: new Date().toISOString().split("T")[0],
       status: "DRAFT",
-      docket_no: "",
       to_city: "",
       destination_branch: "",
       consignor_city: "",
       consignee_city: "",
+      consignor_name: "",
+      consignor_phone: "",
+      consignor_address: "",
+      consignee_name: "",
+      consignee_phone: "",
+      consignee_address: "",
       basis: "WEIGHT",
       payment_type: "PAID",
       mode: "ROAD",
       delivery_type: "DOOR",
-      consignor_name: "",
-      consignee_name: "",
-      additional_charges: "0.00",
-      delivery_charge: "0.00",
-      advance_amount: "0.00",
+      gst_party: "",
+      gst_number: "",
+      notes: "",
+      additional_charges: 0,
+      delivery_charge: 0,
+      advance_amount: 0,
       idempotency_key: "",
       line_items: [
         {
@@ -65,20 +88,31 @@ export function NewDocketClient() {
           package_type: "BOX",
           rate_type: "PER_PIECE",
           pieces: 2,
-          actual_weight: "43",
-          charged_weight: "9",
-          rate: "15",
-          charge: "30",
+          actual_weight: 43,
+          charged_weight: 9,
+          rate: 15,
+          charge: 30,
         },
       ],
     },
   });
 
   const { handleSubmit, setValue } = methods;
-  const lineItems = useWatch({
-    control: methods.control,
-    name: "line_items",
-  });
+
+  const handlePartySaved = (party: DocketMetadata["parties"][number]) => {
+    setMetadata((current) => {
+      if (!current) return current;
+
+      const parties = current.parties.some((item) => item.id === party.id)
+        ? current.parties.map((item) => (item.id === party.id ? party : item))
+        : [...current.parties, party];
+
+      return {
+        ...current,
+        parties: parties.sort((a, b) => a.name.localeCompare(b.name)),
+      };
+    });
+  };
 
   useEffect(() => {
     const loadMetadata = async () => {
@@ -91,10 +125,12 @@ export function NewDocketClient() {
 
       try {
         const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+        const headers = {
+          Authorization: `Bearer ${token}`,
+          "X-Use-Primary-DB": "true",
+        };
         const response = await fetch(`${apiUrl}/api/v1/dockets/metadata/`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          headers,
         });
 
         if (response.status === 401) {
@@ -110,27 +146,7 @@ export function NewDocketClient() {
           throw new Error("Metadata request failed");
         }
 
-        const result = (await response.json()) as DocketMetadata;
-        setMetadata(result);
-
-        const userBranch =
-          result.branches.find((branch) => branch.id === result.user_branch) ||
-          result.branches[0];
-        const destinationBranch =
-          result.branches.find((branch) => branch.id !== userBranch?.id) ||
-          result.branches[0];
-
-        if (userBranch?.city) {
-          setValue("consignor_city", String(userBranch.city), { shouldValidate: true });
-        }
-
-        if (destinationBranch) {
-          setValue("destination_branch", String(destinationBranch.id), { shouldValidate: true });
-          if (destinationBranch.city) {
-            setValue("to_city", String(destinationBranch.city), { shouldValidate: true });
-            setValue("consignee_city", String(destinationBranch.city), { shouldValidate: true });
-          }
-        }
+        setMetadata((await response.json()) as DocketMetadata);
       } catch (error) {
         console.error("Metadata error:", error);
         toast.error("Could not load branches and cities.");
@@ -140,7 +156,7 @@ export function NewDocketClient() {
     };
 
     loadMetadata();
-  }, [router, setValue]);
+  }, [router]);
 
   useEffect(() => {
     const generateUUID = () => {
@@ -154,29 +170,6 @@ export function NewDocketClient() {
     setValue("idempotency_key", generateUUID());
   }, [setValue]);
 
-  // Update charges when pieces/rate/weight change
-  useEffect(() => {
-    const watchedLineItems = lineItems || [];
-    watchedLineItems.forEach((item, index) => {
-      const rate = parseFloat(item.rate) || 0;
-      const pieces = Number(item.pieces) || 0;
-      const weight = parseFloat(item.charged_weight) || 0;
-      
-      let newCharge = "0";
-      if (item.rate_type === "PER_PIECE") {
-        newCharge = (rate * pieces).toFixed(0);
-      } else if (item.rate_type === "PER_KG") {
-        newCharge = (rate * weight).toFixed(0);
-      } else if (item.rate_type === "FLAT") {
-        newCharge = rate.toFixed(0);
-      }
-
-      if (item.charge !== newCharge) {
-        setValue(`line_items.${index}.charge`, newCharge);
-      }
-    });
-  }, [lineItems, setValue]);
-
   const onSubmit = async (data: DocketFormValues) => {
     setIsSubmitting(true);
     setFormError(null);
@@ -186,6 +179,7 @@ export function NewDocketClient() {
     if (!token) {
       setFormError("Authentication session expired. Please log in again.");
       toast.error("Authentication session expired.");
+      setIsSubmitting(false);
       router.push("/");
       return;
     }
@@ -194,12 +188,18 @@ export function NewDocketClient() {
 
     if (result.success) {
       setIsSuccess(true);
-      toast.success("Docket created successfully!");
+      toast.success(`Docket ${result.data?.docket_no || ""} created successfully!`.trim());
       setTimeout(() => {
         router.push("/dockets/new");
         router.refresh();
       }, 2000);
     } else {
+      if (result.status === 401) {
+        localStorage.removeItem("access_token");
+        localStorage.removeItem("refresh_token");
+        localStorage.removeItem("user");
+        router.push("/");
+      }
       const errorMessage = result.error || "An unknown error occurred";
       setFormError(errorMessage);
       toast.error(errorMessage);
@@ -264,7 +264,7 @@ export function NewDocketClient() {
                   </Alert>
                 )}
                 <DocketHeader metadata={metadata} />
-                <PartyInfo metadata={metadata} />
+                <PartyInfo metadata={metadata} onPartySaved={handlePartySaved} />
                 <motion.div variants={itemVariants} className="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-10 gap-6 lg:overflow-hidden border-t border-border pt-4">
                   <LineItemsSection />
                   <PaymentSection isSubmitting={isSubmitting} />

@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Loader2 } from "lucide-react";
 import { FormLabel, StyledInput } from "./form-fields";
 import { DocketFormValues } from "../_lib/schema";
+import { calculateLineItemCharge } from "../_lib/charges";
 
 interface PaymentSectionProps {
   isSubmitting: boolean;
@@ -19,10 +20,10 @@ export function PaymentSection({ isSubmitting }: PaymentSectionProps) {
   const advanceAmount = watch("advance_amount");
 
   const calculateTotals = () => {
-    const freight = lineItems.reduce((sum, item) => sum + (parseFloat(item?.charge) || 0), 0);
-    const additional = parseFloat(additionalCharges) || 0;
-    const delivery = parseFloat(deliveryCharge) || 0;
-    const advance = parseFloat(advanceAmount) || 0;
+    const freight = lineItems.reduce((sum, item) => sum + (calculateLineItemCharge(item) || 0), 0);
+    const additional = Number(additionalCharges) || 0;
+    const delivery = Number(deliveryCharge) || 0;
+    const advance = Number(advanceAmount) || 0;
     const finalFreight = freight + additional + delivery;
     return { freight, finalFreight, balance: finalFreight - advance };
   };
@@ -52,7 +53,7 @@ export function PaymentSection({ isSubmitting }: PaymentSectionProps) {
           </div>
           <div className="flex justify-between items-center pt-2 border-t border-border">
             <span className="text-xs font-bold text-primary uppercase tracking-wider">Balance</span>
-            <span className="text-sm font-black text-foreground">-{balance}</span>
+            <span className="text-sm font-black text-foreground">{balance}</span>
           </div>
         </div>
       </div>

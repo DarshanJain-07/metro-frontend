@@ -1,6 +1,5 @@
-"use server";
-
-import { DocketFormValues } from "./schema";
+import type { DocketFormValues } from "./schema";
+import { calculateLineItemCharge } from "./charges";
 
 type ApiError = Record<string, unknown>;
 
@@ -24,14 +23,15 @@ function formatApiError(error: ApiError): string {
   return `${field}: ${String(messages)}`;
 }
 
-function money(value?: string) {
-  return Number(value || 0).toFixed(2);
+function money(value?: string | number) {
+  const num = Number(value || 0);
+  if (isNaN(num)) return "0.00";
+  return num.toFixed(2);
 }
 
 function normalizeDocketPayload(data: DocketFormValues) {
   return {
     ...data,
-    docket_no: undefined,
     to_city: Number(data.to_city),
     destination_branch: Number(data.destination_branch),
     consignor_city: Number(data.consignor_city),
@@ -47,7 +47,7 @@ function normalizeDocketPayload(data: DocketFormValues) {
       actual_weight: money(item.actual_weight),
       charged_weight: money(item.charged_weight),
       rate: money(item.rate),
-      charge: money(item.charge),
+      charge: money(calculateLineItemCharge(item)),
     })),
   };
 }
@@ -69,15 +69,25 @@ export async function createDocket(data: DocketFormValues, token: string) {
 
     const result = await response.json().catch(() => ({}));
 
+    if (response.status === 401) {
+      return {
+        success: false,
+        status: response.status,
+        error: "Authentication session expired. Please log in again.",
+      };
+    }
+
     if (!response.ok) {
       return {
         success: false,
+        status: response.status,
         error: formatApiError(result),
       };
     }
 
     return {
       success: true,
+      status: response.status,
       data: result,
     };
   } catch (error) {

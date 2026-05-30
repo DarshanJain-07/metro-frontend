@@ -9,10 +9,14 @@ import {
   ComboboxContent,
   ComboboxList,
   ComboboxItem,
-  ComboboxEmpty,
 } from "@/components/ui/combobox";
 import { DocketFormValues } from "../_lib/schema";
 import type { DocketMetadata } from "./new-docket-client";
+
+type ComboboxOption = {
+  label: string;
+  value: string;
+};
 
 const itemVariants: Variants = {
   hidden: { opacity: 0 },
@@ -25,70 +29,81 @@ interface DocketHeaderProps {
 
 export function DocketHeader({ metadata }: DocketHeaderProps) {
   const { register, setValue, watch } = useFormContext<DocketFormValues>();
-  const branchOptions = metadata.branches.map((branch) => ({
+  const branches = metadata.branches ?? [];
+  const cities = metadata.cities ?? [];
+  const destinationBranch = watch("destination_branch") || "";
+  const toCity = watch("to_city") || "";
+  const filteredBranches = toCity
+    ? branches.filter((branch) => String(branch.city) === toCity)
+    : [];
+  const branchOptions: ComboboxOption[] = filteredBranches.map((branch) => ({
     label: branch.name,
     value: String(branch.id),
   }));
-  const cityOptions = metadata.cities.map((city) => ({
+  const cityOptions: ComboboxOption[] = cities.map((city) => ({
     label: `${city.name}${city.state_code ? `, ${city.state_code}` : ""}`,
     value: String(city.id),
   }));
-  
-  const destinationBranch = watch("destination_branch") || "";
-  const toCity = watch("to_city") || "";
+  const selectedDestinationBranch = branchOptions.find((opt) => opt.value === destinationBranch) || null;
+  const selectedToCity = cityOptions.find((opt) => opt.value === toCity) || null;
 
-  const syncDestinationCity = (branchId: string) => {
-    const branch = metadata.branches.find((item) => String(item.id) === branchId);
-    if (branch?.city) {
-      setValue("to_city", String(branch.city), { shouldValidate: true, shouldDirty: true });
+  const handleToCityChange = (cityId: string) => {
+    setValue("to_city", cityId, { shouldValidate: true, shouldDirty: true });
+
+    const selectedBranch = branches.find((branch) => String(branch.id) === destinationBranch);
+    if (!cityId || (selectedBranch && String(selectedBranch.city) !== cityId)) {
+      setValue("destination_branch", "", { shouldValidate: true, shouldDirty: true });
     }
   };
 
   return (
-    <motion.div variants={itemVariants} className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-3 shrink-0">
-      <div>
-        <FormLabel>Docket no</FormLabel>
-        <StyledInput {...register("docket_no")} readOnly placeholder="Auto" />
-      </div>
+    <motion.div variants={itemVariants} className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3 shrink-0">
       <div>
         <FormLabel>Date</FormLabel>
         <StyledInput type="date" {...register("date")} />
       </div>
       <div>
-        <FormLabel>To Branch</FormLabel>
-        <Combobox
-          value={destinationBranch}
-          onValueChange={(val) => {
-            setValue("destination_branch", val || "", { shouldValidate: true });
-            if (val) syncDestinationCity(val);
-          }}
+        <FormLabel>To City</FormLabel>
+        <Combobox<ComboboxOption>
+          items={cityOptions}
+          value={selectedToCity}
+          itemToStringLabel={(item) => item.label}
+          itemToStringValue={(item) => item.value}
+          isItemEqualToValue={(item, value) => item.value === value.value}
+          onValueChange={(val) => handleToCityChange(val?.value || "")}
         >
-          <ComboboxInput placeholder="Branch" className="h-8" />
+          <ComboboxInput placeholder="City" className="h-8" />
           <ComboboxContent>
             <ComboboxList>
-              {branchOptions.map((opt) => (
-                <ComboboxItem key={opt.value} value={opt.value}>
+              {(opt: ComboboxOption) => (
+                <ComboboxItem key={opt.value} value={opt}>
                   {opt.label}
                 </ComboboxItem>
-              ))}
+              )}
             </ComboboxList>
           </ComboboxContent>
         </Combobox>
       </div>
       <div>
-        <FormLabel>To City</FormLabel>
-        <Combobox
-          value={toCity}
-          onValueChange={(val) => setValue("to_city", val || "", { shouldValidate: true })}
+        <FormLabel>To Branch</FormLabel>
+        <Combobox<ComboboxOption>
+          items={branchOptions}
+          value={selectedDestinationBranch}
+          itemToStringLabel={(item) => item.label}
+          itemToStringValue={(item) => item.value}
+          isItemEqualToValue={(item, value) => item.value === value.value}
+          onValueChange={(val) => {
+            setValue("destination_branch", val?.value || "", { shouldValidate: true, shouldDirty: true });
+          }}
         >
-          <ComboboxInput placeholder="City" className="h-8" />
+          <ComboboxInput placeholder={toCity ? "Branch" : "Select city first"} className="h-8" />
           <ComboboxContent>
             <ComboboxList>
-              {cityOptions.map((opt) => (
-                <ComboboxItem key={opt.value} value={opt.value}>
+              {(opt: ComboboxOption) => (
+                <ComboboxItem key={opt.value} value={opt}>
                   {opt.label}
                 </ComboboxItem>
-              ))}
+              )}
             </ComboboxList>
           </ComboboxContent>
         </Combobox>

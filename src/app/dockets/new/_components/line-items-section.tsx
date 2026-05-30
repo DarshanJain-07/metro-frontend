@@ -4,6 +4,7 @@ import { X } from "lucide-react";
 import { StyledInput } from "./form-fields";
 import { CustomSelect } from "./custom-select";
 import { DocketFormValues } from "../_lib/schema";
+import { calculateLineItemCharge } from "../_lib/charges";
 
 export function LineItemsSection() {
   const { register, control, watch } = useFormContext<DocketFormValues>();
@@ -82,7 +83,7 @@ export function LineItemsSection() {
                   <StyledInput {...register(`line_items.${idx}.rate`)} />
                 </td>
                 <td className="py-1 px-1 font-bold text-right text-xs text-foreground">
-                  {lineItems[idx]?.charge}
+                  {calculateLineItemCharge(lineItems[idx])}
                 </td>
                 <td className="py-1 px-1 text-center">
                   <button
@@ -104,7 +105,7 @@ export function LineItemsSection() {
           type="button" 
           variant="outline" 
           size="sm" 
-          onClick={() => append({ item_type: "GENERAL", package_type: "BOX", rate_type: "PER_PIECE", pieces: 1, actual_weight: "0", charged_weight: "0", rate: "0", charge: "0" })} 
+          onClick={() => append({ item_type: "GENERAL", package_type: "BOX", rate_type: "PER_PIECE", pieces: 1, actual_weight: 0, charged_weight: 0, rate: 0, charge: 0 })} 
           className="h-8 text-xs font-bold uppercase tracking-widest px-4 active-press hover-lift"
         >
           + Add row
