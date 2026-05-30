@@ -25,25 +25,19 @@ const sidebarGroups = [
     ],
   },
   {
+    title: "MASTERS",
+    items: [
+      { icon: LayoutGrid, label: "States", href: "/masters/states" },
+      { icon: Building2, label: "Cities", href: "/masters/cities" },
+      { icon: ArrowRightLeft, label: "Branches", href: "/masters/branches" },
+      { icon: UserPlus, label: "Parties", href: "/masters/parties" },
+    ],
+  },
+  {
     title: "ACCOUNT",
     items: [
       { icon: FileText, label: "Ledger", href: "/account/ledger" },
       { icon: Calculator, label: "Bills", href: "/account/bills" },
-    ],
-  },
-  {
-    title: "MASTER (ADD)",
-    items: [
-      { icon: UserPlus, label: "Party", href: "/master/party" },
-      { icon: ArrowRightLeft, label: "Movement", href: "/master/movement" },
-    ],
-  },
-  {
-    title: "VIEW MASTER",
-    items: [
-      { icon: User, label: "Users", href: "/view/users" },
-      { icon: Building2, label: "Branches", href: "/view/branches" },
-      { icon: LayoutGrid, label: "Grid", href: "/view/grid" },
     ],
   },
 ];
