@@ -5,11 +5,11 @@ import { MasterTable, ColumnDef, FormFieldDef } from "@/components/master-table"
 import { fetchWithAuth } from "@/lib/api";
 
 interface Party {
-  id: number;
+  id: string;
   name: string;
   phone: string;
   address: string;
-  city: number;
+  city: string;
   city_name: string;
   state_code: string;
   gst_number: string | null;
@@ -34,13 +34,13 @@ const columns: ColumnDef<Party>[] = [
 ];
 
 export default function PartiesPage() {
-  const [cityOptions, setCityOptions] = useState<{label: string, value: number}[]>([]);
+  const [cityOptions, setCityOptions] = useState<{label: string, value: string}[]>([]);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
   useEffect(() => {
     const fetchCities = async () => {
       try {
-        const res = await fetchWithAuth(`${apiUrl}/api/v1/cities/`);
+        const res = await fetchWithAuth(`${apiUrl}/api/v1/master/cities/`);
         if (res.ok) {
           const json = await res.json();
           const data = json.results || json;
@@ -66,7 +66,7 @@ export default function PartiesPage() {
     <div className="p-8 max-w-6xl mx-auto">
       <MasterTable<Party>
         title="Parties"
-        apiPath="/api/v1/parties/"
+        apiPath="/api/v1/master/parties/"
         columns={columns}
         formFields={formFields}
       />

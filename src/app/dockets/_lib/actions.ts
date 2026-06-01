@@ -1,5 +1,5 @@
 export interface DocketListItem {
-  id: number;
+  id: string;
   docket_no: string;
   date: string;
   consignor_name: string;

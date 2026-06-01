@@ -5,9 +5,9 @@ import { MasterTable, ColumnDef, FormFieldDef } from "@/components/master-table"
 import { fetchWithAuth } from "@/lib/api";
 
 interface City {
-  id: number;
+  id: string;
   name: string;
-  state: number;
+  state: string;
   state_name: string;
   state_code: string;
   is_active: boolean;
@@ -30,13 +30,13 @@ const columns: ColumnDef<City>[] = [
 ];
 
 export default function CitiesPage() {
-  const [stateOptions, setStateOptions] = useState<{label: string, value: number}[]>([]);
+  const [stateOptions, setStateOptions] = useState<{label: string, value: string}[]>([]);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
   useEffect(() => {
     const fetchStates = async () => {
       try {
-        const res = await fetchWithAuth(`${apiUrl}/api/v1/states/`);
+        const res = await fetchWithAuth(`${apiUrl}/api/v1/master/states/`);
         if (res.ok) {
           const json = await res.json();
           const data = json.results || json;
@@ -59,7 +59,7 @@ export default function CitiesPage() {
     <div className="p-8 max-w-6xl mx-auto">
       <MasterTable<City>
         title="Cities"
-        apiPath="/api/v1/cities/"
+        apiPath="/api/v1/master/cities/"
         columns={columns}
         formFields={formFields}
       />

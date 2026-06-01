@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { toast } from "sonner";
 import { 
   Table, 
@@ -12,7 +13,7 @@ import {
   TableRow 
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { FileText, ExternalLink } from "lucide-react";
+import { FileText, Pencil } from "lucide-react";
 import { getDockets, type DocketsResponse } from "../_lib/actions";
 import { Pagination } from "./pagination";
 import { cn } from "@/lib/utils";
@@ -176,9 +177,13 @@ export function DocketsList() {
                     </Badge>
                   </TableCell>
                   <TableCell className="py-2">
-                    <button className="h-6 w-6 rounded-md flex items-center justify-center hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors opacity-0 group-hover:opacity-100">
-                      <ExternalLink className="h-3 w-3 text-muted-foreground" />
-                    </button>
+                    <Link 
+                      href={`/dockets/${docket.id}`}
+                      className="h-6 w-6 rounded-md flex items-center justify-center hover:bg-zinc-200 dark:hover:bg-zinc-800 transition-colors opacity-0 group-hover:opacity-100"
+                      title="Update Docket"
+                    >
+                      <Pencil className="h-3 w-3 text-muted-foreground" />
+                    </Link>
                   </TableCell>
                 </TableRow>
               ))}

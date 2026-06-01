@@ -28,7 +28,7 @@ type PaginatedResponse<T> = {
 type PartyFieldPrefix = "consignor" | "consignee";
 type PartyDialogState = {
   fieldPrefix: PartyFieldPrefix;
-  partyId: number | null;
+  partyId: string | null;
   title: string;
   values: {
     name: string;
@@ -118,7 +118,7 @@ export function PartyInfo({ metadata, onPartySaved }: PartyInfoProps) {
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
       try {
-        const response = await fetch(`${apiUrl}/api/v1/parties/?search=${encodeURIComponent(query)}`, {
+        const response = await fetch(`${apiUrl}/api/v1/master/parties/?search=${encodeURIComponent(query)}`, {
           headers: {
             Authorization: `Bearer ${token}`,
             "X-Use-Primary-DB": "true",
@@ -265,8 +265,8 @@ export function PartyInfo({ metadata, onPartySaved }: PartyInfoProps) {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
     const isUpdate = partyDialog.partyId !== null;
     const url = isUpdate
-      ? `${apiUrl}/api/v1/parties/${partyDialog.partyId}/`
-      : `${apiUrl}/api/v1/parties/`;
+      ? `${apiUrl}/api/v1/master/parties/${partyDialog.partyId}/`
+      : `${apiUrl}/api/v1/master/parties/`;
 
     try {
       const response = await fetch(url, {
@@ -278,7 +278,7 @@ export function PartyInfo({ metadata, onPartySaved }: PartyInfoProps) {
         },
         body: JSON.stringify({
           name: partyDialog.values.name.trim(),
-          city: Number(partyDialog.values.city),
+          city: partyDialog.values.city,
           phone: partyDialog.values.phone.trim(),
           address: partyDialog.values.address.trim(),
           gst_number: partyDialog.values.gst_number.trim() || null,

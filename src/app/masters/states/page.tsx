@@ -3,7 +3,7 @@
 import { MasterTable, ColumnDef, FormFieldDef } from "@/components/master-table";
 
 interface State {
-  id: number;
+  id: string;
   name: string;
   code: string;
 }
@@ -24,7 +24,7 @@ export default function StatesPage() {
     <div className="p-8 max-w-6xl mx-auto">
       <MasterTable<State>
         title="States"
-        apiPath="/api/v1/states/"
+        apiPath="/api/v1/master/states/"
         columns={columns}
         formFields={formFields}
       />

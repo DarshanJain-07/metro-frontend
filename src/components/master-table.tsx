@@ -31,7 +31,7 @@ interface MasterTableProps<T> {
   formFields: FormFieldDef[];
 }
 
-export function MasterTable<T extends { id: number }>({ title, apiPath, columns, formFields }: MasterTableProps<T>) {
+export function MasterTable<T extends { id: string }>({ title, apiPath, columns, formFields }: MasterTableProps<T>) {
   const [data, setData] = useState<T[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
@@ -105,7 +105,7 @@ export function MasterTable<T extends { id: number }>({ title, apiPath, columns,
     }
   };
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string) => {
     if (!confirm("Are you sure you want to delete this item?")) return;
     try {
       const res = await fetchWithAuth(`${apiUrl}${apiPath}${id}/`, {

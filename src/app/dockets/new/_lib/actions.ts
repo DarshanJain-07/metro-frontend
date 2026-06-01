@@ -32,10 +32,10 @@ function money(value?: string | number) {
 function normalizeDocketPayload(data: DocketFormValues) {
   return {
     ...data,
-    to_city: Number(data.to_city),
-    destination_branch: Number(data.destination_branch),
-    consignor_city: Number(data.consignor_city),
-    consignee_city: Number(data.consignee_city),
+    to_city: data.to_city,
+    destination_branch: data.destination_branch,
+    consignor_city: data.consignor_city,
+    consignee_city: data.consignee_city,
     gst_party: data.gst_party || data.consignor_name,
     gst_number: data.gst_number || null,
     additional_charges: money(data.additional_charges),
@@ -50,6 +50,94 @@ function normalizeDocketPayload(data: DocketFormValues) {
       charge: money(calculateLineItemCharge(item)),
     })),
   };
+}
+
+export async function getDocket(id: string | number, token: string) {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+
+  try {
+    const response = await fetch(`${apiUrl}/api/v1/dockets/${id}/`, {
+      headers: {
+        "Authorization": `Bearer ${token}`,
+      },
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      return {
+        success: false,
+        status: response.status,
+        error: "Authentication session expired.",
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        success: false,
+        status: response.status,
+        error: result.detail || "Failed to fetch docket",
+      };
+    }
+
+    return {
+      success: true,
+      status: response.status,
+      data: result,
+    };
+  } catch (error) {
+    console.error("Get docket error:", error);
+    return {
+      success: false,
+      error: "A network error occurred",
+    };
+  }
+}
+
+export async function updateDocket(id: string | number, data: DocketFormValues, token: string) {
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const payload = normalizeDocketPayload(data);
+
+  try {
+    const response = await fetch(`${apiUrl}/api/v1/dockets/${id}/`, {
+      method: "PATCH",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const result = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      return {
+        success: false,
+        status: response.status,
+        error: "Authentication session expired. Please log in again.",
+      };
+    }
+
+    if (!response.ok) {
+      return {
+        success: false,
+        status: response.status,
+        error: formatApiError(result),
+      };
+    }
+
+    return {
+      success: true,
+      status: response.status,
+      data: result,
+    };
+  } catch (error) {
+    console.error("Update docket error:", error);
+    return {
+      success: false,
+      error: "A network error occurred",
+    };
+  }
 }
 
 export async function createDocket(data: DocketFormValues, token: string) {

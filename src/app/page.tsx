@@ -7,20 +7,17 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Loader2, AlertCircle } from "lucide-react";
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
+import { Loader2 } from "lucide-react";
 
 export default function LoginPage() {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const router = useRouter();
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
-    setError(null);
 
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -47,11 +44,9 @@ export default function LoginPage() {
         router.push("/dockets/new");
       } else {
         const errorMessage = data?.detail || data?.non_field_errors?.[0] || "Login failed. Please check your credentials.";
-        setError(errorMessage);
         toast.error(errorMessage);
       }
     } catch (error) {
-      setError("An error occurred. Please try again later.");
       toast.error("An error occurred. Please try again later.");
       console.error("Login error:", error);
     } finally {
@@ -61,23 +56,16 @@ export default function LoginPage() {
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50 px-4 dark:bg-zinc-950">
-      <Card className="w-full max-w-sm">
-        <CardHeader className="space-y-1">
+      <Card className="w-full max-w-sm animate-slide-up">
+        <CardHeader>
           <CardTitle className="text-2xl font-bold">Login</CardTitle>
           <CardDescription>
             Enter your username and password to access your account
           </CardDescription>
         </CardHeader>
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
-            {error && (
-              <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Login Failed</AlertTitle>
-                <AlertDescription>{error}</AlertDescription>
-              </Alert>
-            )}
-            <div className="space-y-2">
+        <form onSubmit={handleSubmit} className="grid gap-6">
+          <CardContent className="grid gap-4">
+            <div className="grid gap-2">
               <Label htmlFor="username">Username</Label>
               <Input
                 id="username"
@@ -88,10 +76,8 @@ export default function LoginPage() {
                 required
               />
             </div>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <Label htmlFor="password">Password</Label>
-              </div>
+            <div className="grid gap-2">
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"

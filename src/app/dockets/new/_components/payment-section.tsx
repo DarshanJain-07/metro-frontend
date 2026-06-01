@@ -8,9 +8,10 @@ import { calculateLineItemCharge } from "../_lib/charges";
 
 interface PaymentSectionProps {
   isSubmitting: boolean;
+  docketId?: string;
 }
 
-export function PaymentSection({ isSubmitting }: PaymentSectionProps) {
+export function PaymentSection({ isSubmitting, docketId }: PaymentSectionProps) {
   const router = useRouter();
   const { register, watch } = useFormContext<DocketFormValues>();
   
@@ -71,7 +72,7 @@ export function PaymentSection({ isSubmitting }: PaymentSectionProps) {
         <Button type="button" variant="outline" onClick={() => router.back()} className="h-8 w-full text-xs font-bold active-press hover-lift">Cancel</Button>
         <Button type="submit" disabled={isSubmitting} className="bg-primary text-primary-foreground hover:bg-primary/90 h-8 w-full text-xs font-bold active-press hover-lift">
           {isSubmitting ? <Loader2 className="h-3 w-3 animate-spin mr-2" /> : null}
-          {isSubmitting ? "Saving..." : "Save Docket"}
+          {isSubmitting ? (docketId ? "Updating..." : "Saving...") : (docketId ? "Update Docket" : "Save Docket")}
         </Button>
       </div>
     </div>

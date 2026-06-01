@@ -5,9 +5,9 @@ import { MasterTable, ColumnDef, FormFieldDef } from "@/components/master-table"
 import { fetchWithAuth } from "@/lib/api";
 
 interface Branch {
-  id: number;
+  id: string;
   name: string;
-  city: number;
+  city: string;
   city_name: string;
   state_code: string;
   is_active: boolean;
@@ -30,13 +30,13 @@ const columns: ColumnDef<Branch>[] = [
 ];
 
 export default function BranchesPage() {
-  const [cityOptions, setCityOptions] = useState<{label: string, value: number}[]>([]);
+  const [cityOptions, setCityOptions] = useState<{label: string, value: string}[]>([]);
   const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
   useEffect(() => {
     const fetchCities = async () => {
       try {
-        const res = await fetchWithAuth(`${apiUrl}/api/v1/cities/`);
+        const res = await fetchWithAuth(`${apiUrl}/api/v1/master/cities/`);
         if (res.ok) {
           const json = await res.json();
           const data = json.results || json;
@@ -59,7 +59,7 @@ export default function BranchesPage() {
     <div className="p-8 max-w-6xl mx-auto">
       <MasterTable<Branch>
         title="Branches"
-        apiPath="/api/v1/branches/"
+        apiPath="/api/v1/master/branches/"
         columns={columns}
         formFields={formFields}
       />
