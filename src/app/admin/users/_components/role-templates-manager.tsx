@@ -9,6 +9,7 @@ import { toast } from "sonner";
 import { fetchWithAuth } from "@/lib/api";
 import { Trash2, CheckCircle2, Loader2 } from "lucide-react";
 import { CompactInput } from "@/components/ui/form-elements";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 
 interface Preset {
   id: string;
@@ -29,9 +30,11 @@ interface RoleDefinition {
 const METRO_ROLE = "METRO";
 
 export function RoleTemplatesManager({ catalog, canManage }: RoleTemplatesManagerProps) {
-  const [roles, setRoles] = useState<RoleDefinition[]>([]);
   const [selectedRole, setSelectedRole] = useState<string>("");
-  const [rolePermissions, setRolePermissions] = useState<Record<string, PermissionState>>({});
+  const [rolePermissionOverrides, setRolePermissionOverrides] = useState<{
+    role: string;
+    permissions: Record<string, PermissionState>;
+  } | null>(null);
   const [presets, setPresets] = useState<Preset[]>(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("permission_presets");
@@ -46,45 +49,46 @@ export function RoleTemplatesManager({ catalog, canManage }: RoleTemplatesManage
     return [];
   });
   const [newPresetName, setNewPresetName] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
   const [isApplying, setIsApplying] = useState(false);
 
-  useEffect(() => {
-    if (!canManage) return;
-
-    async function loadRoles() {
-      const response = await fetchWithAuth("/api/v1/auth/roles/");
+  const {
+    data: loadedRoles,
+    error: rolesError,
+  } = useAsyncResource<RoleDefinition[]>(
+    async ({ signal }) => {
+      const response = await fetchWithAuth("/api/v1/auth/roles/", { signal });
       if (!response.ok) {
-        toast.error("Could not load roles.");
-        return;
+        throw new Error("Could not load roles.");
       }
       const payload = await response.json();
-      const nextRoles = (payload.results || payload) as RoleDefinition[];
-      setRoles(nextRoles);
-      setSelectedRole((current) => current || nextRoles[0]?.code || "");
-    }
-
-    loadRoles();
-  }, [canManage]);
+      return (payload.results || payload) as RoleDefinition[];
+    },
+    { enabled: canManage, deps: [canManage], initialData: [] },
+  );
+  const roles = loadedRoles ?? [];
+  const effectiveSelectedRole = selectedRole || roles[0]?.code || "";
 
   // Save presets to localStorage whenever they change
   useEffect(() => {
     localStorage.setItem("permission_presets", JSON.stringify(presets));
   }, [presets]);
 
-  // Load effective permissions when role changes
-  useEffect(() => {
-    if (!canManage || !selectedRole) return;
-
-    async function loadRolePermissions() {
-      setIsLoading(true);
-      const response = await fetchWithAuth(`/api/v1/auth/company-role-permissions/?role=${selectedRole}`);
-      setIsLoading(false);
+  const {
+    data: loadedRolePermissions,
+    error: rolePermissionsError,
+    isLoading,
+  } = useAsyncResource<Record<string, PermissionState>>(
+    async ({ signal }) => {
+      if (!effectiveSelectedRole) return {};
+      const response = await fetchWithAuth(
+        `/api/v1/auth/company-role-permissions/?role=${effectiveSelectedRole}`,
+        { signal },
+      );
       if (response.ok) {
         const payload = await response.json();
         const perms = (payload[0]?.permissions || []) as { code: string; scope: string }[];
         const nextState: Record<string, PermissionState> = {};
-        if (selectedRole === METRO_ROLE && perms.some((p) => p.code === "*")) {
+        if (effectiveSelectedRole === METRO_ROLE && perms.some((p) => p.code === "*")) {
           catalog.forEach((permission) => {
             nextState[permission.code] = { enabled: true, scope: "all" };
           });
@@ -93,12 +97,28 @@ export function RoleTemplatesManager({ catalog, canManage }: RoleTemplatesManage
             nextState[p.code] = { enabled: true, scope: p.scope };
           });
         }
-        setRolePermissions(nextState);
+        return nextState;
       }
-    }
+      throw new Error("Could not load role permissions.");
+    },
+    {
+      enabled: canManage && !!effectiveSelectedRole,
+      deps: [canManage, effectiveSelectedRole, catalog],
+      initialData: {},
+    },
+  );
+  const rolePermissions =
+    rolePermissionOverrides?.role === effectiveSelectedRole
+      ? rolePermissionOverrides.permissions
+      : loadedRolePermissions ?? {};
 
-    loadRolePermissions();
-  }, [canManage, selectedRole, catalog]);
+  useEffect(() => {
+    [rolesError, rolePermissionsError].forEach((error) => {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      }
+    });
+  }, [rolesError, rolePermissionsError]);
 const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
 // ... (existing useEffects)
@@ -112,15 +132,19 @@ useEffect(() => {
 }, [confirmDeleteId]);
 
 const handleToggle = (code: string, enabled: boolean) => {
-  if (selectedRole === METRO_ROLE) return;
-  setRolePermissions(prev => {
+  if (effectiveSelectedRole === METRO_ROLE) return;
+  setRolePermissionOverrides(prevOverrides => {
+    const prev =
+      prevOverrides?.role === effectiveSelectedRole
+        ? prevOverrides.permissions
+        : rolePermissions;
     const next = { ...prev };
     if (enabled) {
       next[code] = { enabled: true, scope: "branch" };
     } else {
       delete next[code];
     }
-    return next;
+    return { role: effectiveSelectedRole, permissions: next };
   });
 };
 
@@ -150,11 +174,14 @@ const deletePreset = (id: string) => {
 };
 
 const applyPreset = (preset: Preset) => {
-  setRolePermissions({ ...preset.permissions });
+  setRolePermissionOverrides({
+    role: effectiveSelectedRole,
+    permissions: { ...preset.permissions },
+  });
   toast.success(`Loaded preset "${preset.name}" into the matrix.`);
 };
   const applyToRole = async () => {
-    if (!selectedRole || isApplying || selectedRole === METRO_ROLE) return;
+    if (!effectiveSelectedRole || isApplying || effectiveSelectedRole === METRO_ROLE) return;
 
     setIsApplying(true);
     toast.loading("Applying template to all users of this role...", { id: "apply-role" });
@@ -174,7 +201,7 @@ const applyPreset = (preset: Preset) => {
           return fetchWithAuth("/api/v1/auth/company-role-overrides/", {
             method: "POST",
             body: JSON.stringify({
-              role: selectedRole,
+              role: effectiveSelectedRole,
               permission_code: p.code,
               enabled: !!state?.enabled,
               scope: state?.scope || "branch",
@@ -184,7 +211,7 @@ const applyPreset = (preset: Preset) => {
       );
 
       if (results.every(r => r.ok)) {
-        toast.success(`Template applied to all ${selectedRole} users.`, { id: "apply-role" });
+        toast.success(`Template applied to all ${effectiveSelectedRole} users.`, { id: "apply-role" });
       } else {
         toast.error("Some permissions failed to apply.", { id: "apply-role" });
       }
@@ -200,14 +227,14 @@ const applyPreset = (preset: Preset) => {
       <div className="rounded-md border border-border bg-card p-3">
         <div className="flex flex-col gap-2 sm:flex-row">
           <CompactSelect
-            value={selectedRole}
+            value={effectiveSelectedRole}
             onValueChange={setSelectedRole}
             options={roles.map((item) => ({ label: item.name, value: item.code }))}
             className="flex-1"
           />
           <Button 
             onClick={applyToRole} 
-            disabled={isApplying || isLoading || selectedRole === METRO_ROLE}
+            disabled={isApplying || isLoading || effectiveSelectedRole === METRO_ROLE}
             className="shrink-0"
           >
             {isApplying ? <Loader2 className="h-4 w-4 animate-spin mr-2" /> : <CheckCircle2 className="h-4 w-4 mr-2" />}
@@ -263,7 +290,7 @@ const applyPreset = (preset: Preset) => {
       </div>
 
       <div className="pt-4 border-t border-border">
-        {selectedRole === METRO_ROLE && (
+        {effectiveSelectedRole === METRO_ROLE && (
           <p className="mb-3 rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
             Metro is built in with every permission. Templates and overrides cannot change it.
           </p>
@@ -281,14 +308,17 @@ const applyPreset = (preset: Preset) => {
             try {
               const str = await navigator.clipboard.readText();
               const parsed = JSON.parse(str);
-              setRolePermissions(parsed);
+              setRolePermissionOverrides({
+                role: effectiveSelectedRole,
+                permissions: parsed,
+              });
               toast.success("Matrix pasted from clipboard.");
             } catch {
               toast.error("Invalid matrix data in clipboard.");
             }
           }}
           isSaving={isLoading || isApplying}
-          readOnly={selectedRole === METRO_ROLE}
+          readOnly={effectiveSelectedRole === METRO_ROLE}
         />
       </div>
     </div>

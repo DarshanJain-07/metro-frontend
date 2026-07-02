@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import { TrendingUp, Users, Package, ArrowUpRight } from "lucide-react";
 import { fetchWithAuth } from "@/lib/api";
 import { ContentSkeleton } from "@/components/app-skeleton";
 import { PageContainer } from "@/components/page-container";
 import { cn } from "@/lib/utils";
 import { Surface } from "@/components/ui/surface";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 
 interface DashboardStats {
   total_dockets: number;
@@ -24,25 +24,15 @@ export function DashboardClient({
   cachedMetrics?: React.ReactNode;
   cachedOverview?: React.ReactNode;
 }) {
-  const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-
-  useEffect(() => {
-    async function loadStats() {
-      try {
-        const res = await fetchWithAuth("/api/v1/dashboard/");
-        if (res.ok) {
-          const data = await res.json();
-          setStats(data);
-        }
-      } catch (err) {
-        console.error("Failed to load dashboard stats", err);
-      } finally {
-        setIsLoading(false);
+  const { data: stats, isLoading } = useAsyncResource<DashboardStats>(
+    async ({ signal }) => {
+      const res = await fetchWithAuth("/api/v1/dashboard/", { signal });
+      if (!res.ok) {
+        throw new Error("Could not load dashboard stats.");
       }
-    }
-    loadStats();
-  }, []);
+      return res.json();
+    },
+  );
 
   if (isLoading) return <ContentSkeleton />;
 

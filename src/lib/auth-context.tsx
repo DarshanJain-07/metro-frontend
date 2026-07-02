@@ -5,18 +5,22 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useState,
   ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
+  ACTIVE_MEMBERSHIP_ID_STORAGE_KEY,
   API_URL,
+  clearStoredActiveContext,
   fetchWithAuth,
   getActiveContextHeaders,
   readApiError,
   setAuthTokenGetter,
   setAuthTokenRefresher,
+  setStoredActiveContext,
 } from "@/lib/api";
 import {
   buildAuthUrl,
@@ -93,6 +97,8 @@ export interface AuthResult {
 interface AuthContextType {
   user: User | null;
   isLoading: boolean;
+  isInitializing: boolean;
+  isAuthActionLoading: boolean;
   authError: string | null;
   login: (identifier: string, password: string) => Promise<AuthResult>;
   loginWithPassword: (
@@ -132,6 +138,43 @@ interface AuthContextType {
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
+const SessionContext = createContext<
+  | Pick<
+      AuthContextType,
+      | "user"
+      | "isLoading"
+      | "isInitializing"
+      | "isAuthActionLoading"
+      | "authError"
+      | "refreshUser"
+      | "refreshUserWithError"
+    >
+  | undefined
+>(undefined);
+const ActiveMembershipContext = createContext<
+  Pick<AuthContextType, "activeMembership" | "setActiveMembership"> | undefined
+>(undefined);
+const AuthActionsContext = createContext<
+  | Pick<
+      AuthContextType,
+      | "login"
+      | "loginWithPassword"
+      | "requestOtp"
+      | "verifyOtp"
+      | "startGoogleLogin"
+      | "exchangeGoogleLogin"
+      | "exchangeGoogleCode"
+      | "challengeMfa"
+      | "verifyMfa"
+      | "selectOrganization"
+      | "syncAuthProfile"
+      | "logout"
+    >
+  | undefined
+>(undefined);
+const PermissionsContext = createContext<
+  Pick<AuthContextType, "can"> | undefined
+>(undefined);
 
 const BACKEND_UNREACHABLE_MESSAGE = `Could not reach the backend at ${API_URL}. Make sure the API server is running and CORS allows this frontend.`;
 const ACCESS_TOKEN_STORAGE_KEY = "metro:access-token";
@@ -159,6 +202,10 @@ function isPendingAuthPayload(payload: unknown): payload is AuthPendingState {
   return (payload as { status?: unknown }).status === "pending";
 }
 
+function isAuthRejection(response: Response) {
+  return response.status === 401 || response.status === 403;
+}
+
 function getStoredAccessToken() {
   if (typeof window === "undefined") return null;
   return localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
@@ -167,6 +214,29 @@ function getStoredAccessToken() {
 function getStoredRefreshToken() {
   if (typeof window === "undefined") return null;
   return localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
+}
+
+function migrateStoredUserContext() {
+  if (typeof window === "undefined") return;
+
+  const storedUser = localStorage.getItem("user");
+  if (!storedUser) return;
+
+  try {
+    const parsedUser = JSON.parse(storedUser) as User;
+    const storedId = localStorage.getItem(ACTIVE_MEMBERSHIP_ID_STORAGE_KEY);
+    const membership =
+      parsedUser.memberships.find((item) => item.id === storedId) ||
+      parsedUser.memberships[0];
+
+    if (membership) {
+      setStoredActiveContext(membership);
+    }
+  } catch {
+    // Ignore malformed legacy snapshots. The next /me refresh is authoritative.
+  } finally {
+    localStorage.removeItem("user");
+  }
 }
 
 async function refreshStoredAccessToken() {
@@ -198,13 +268,15 @@ async function refreshStoredAccessToken() {
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [isInitializing, setIsInitializing] = useState(true);
+  const [isAuthActionLoading, setIsAuthActionLoading] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const authErrorRef = useRef<string | null>(null);
   const [activeMembership, setActiveMembershipState] =
     useState<Membership | null>(null);
   const router = useRouter();
   const isSigningOutRef = useRef(false);
+  const isLoading = isInitializing || isAuthActionLoading;
 
   useEffect(() => {
     setAuthTokenGetter(async () => getStoredAccessToken());
@@ -217,8 +289,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const applyUser = useCallback((nextUser: User) => {
-    const storedId = localStorage.getItem("active_membership_id");
-    localStorage.setItem("user", JSON.stringify(nextUser));
+    const storedId = localStorage.getItem(ACTIVE_MEMBERSHIP_ID_STORAGE_KEY);
+    isSigningOutRef.current = false;
     setUser(nextUser);
     setAuthError(null);
     authErrorRef.current = null;
@@ -228,16 +300,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         nextUser.memberships.find((membership) => membership.id === storedId) ||
         nextUser.memberships[0];
       setActiveMembershipState(defaultMembership);
-      localStorage.setItem("active_membership_id", defaultMembership.id);
+      setStoredActiveContext(defaultMembership);
     } else {
       setActiveMembershipState(null);
-      localStorage.removeItem("active_membership_id");
+      clearStoredActiveContext();
     }
   }, []);
 
   const clearAuthState = useCallback(() => {
     localStorage.removeItem("user");
-    localStorage.removeItem("active_membership_id");
+    clearStoredActiveContext();
     localStorage.removeItem("last_activity");
     localStorage.removeItem(LAST_AUTH_REDIRECT_STORAGE_KEY);
     localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
@@ -248,11 +320,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     authErrorRef.current = null;
   }, []);
 
+  const expireAuthSession = useCallback(() => {
+    if (isSigningOutRef.current) return;
+
+    const signInUrl = buildAuthUrl(
+      "/sign-in",
+      buildCurrentPathRedirect(
+        window.location.pathname,
+        new URLSearchParams(window.location.search),
+      ),
+    );
+
+    isSigningOutRef.current = true;
+    clearAuthState();
+    router.replace(signInUrl);
+  }, [clearAuthState, router]);
+
   const refreshUser = useCallback(async () => {
     const token = getStoredAccessToken() || (await refreshStoredAccessToken());
     if (!token) {
-      clearAuthState();
-      window.dispatchEvent(new Event("metro:auth-expired"));
+      expireAuthSession();
       return null;
     }
 
@@ -276,7 +363,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
     } catch {
       localStorage.removeItem("user");
-      localStorage.removeItem("active_membership_id");
       setUser(null);
       setActiveMembershipState(null);
       setAuthError(BACKEND_UNREACHABLE_MESSAGE);
@@ -286,19 +372,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (!response.ok) {
       const message = await readAuthError(response);
-      clearAuthState();
+      if (response.status === 401) {
+        expireAuthSession();
+        return null;
+      }
+      if (response.status === 403) {
+        clearAuthState();
+      }
       setAuthError(message);
       authErrorRef.current = message;
-      if (response.status === 401) {
-        window.dispatchEvent(new Event("metro:auth-expired"));
-      }
       return null;
     }
 
     const nextUser = (await response.json()) as User;
     applyUser(nextUser);
     return nextUser;
-  }, [applyUser, clearAuthState]);
+  }, [applyUser, clearAuthState, expireAuthSession]);
 
   const refreshUserWithError = useCallback(async () => {
     const nextUser = await refreshUser();
@@ -362,7 +451,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       body: Record<string, unknown>,
       fallback?: string,
     ): Promise<AuthResult> => {
-      setIsLoading(true);
+      setIsAuthActionLoading(true);
       setAuthError(null);
       authErrorRef.current = null;
 
@@ -385,7 +474,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           pending: null,
         };
       } finally {
-        setIsLoading(false);
+        setIsAuthActionLoading(false);
       }
     },
     [readAuthResult],
@@ -405,7 +494,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = loginWithPassword;
 
   const requestOtp = useCallback(async (identifier: string) => {
-    setIsLoading(true);
+    setIsAuthActionLoading(true);
     setAuthError(null);
     authErrorRef.current = null;
 
@@ -434,7 +523,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
       return { ok: false, error: BACKEND_UNREACHABLE_MESSAGE };
     } finally {
-      setIsLoading(false);
+      setIsAuthActionLoading(false);
     }
   }, []);
 
@@ -450,7 +539,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const startGoogleLogin = useCallback(async (redirectUrl: string) => {
-    setIsLoading(true);
+    setIsAuthActionLoading(true);
     setAuthError(null);
     authErrorRef.current = null;
 
@@ -484,7 +573,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
       return { error: BACKEND_UNREACHABLE_MESSAGE };
     } finally {
-      setIsLoading(false);
+      setIsAuthActionLoading(false);
     }
   }, []);
 
@@ -511,7 +600,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const challengeMfa = useCallback(async (authenticationFactorId: string) => {
-    setIsLoading(true);
+    setIsAuthActionLoading(true);
     setAuthError(null);
     authErrorRef.current = null;
 
@@ -554,7 +643,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         error: BACKEND_UNREACHABLE_MESSAGE,
       };
     } finally {
-      setIsLoading(false);
+      setIsAuthActionLoading(false);
     }
   }, []);
 
@@ -592,7 +681,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const syncAuthProfile = useCallback(async () => {
-    setIsLoading(true);
+    setIsAuthActionLoading(true);
     setAuthError(null);
     authErrorRef.current = null;
 
@@ -603,7 +692,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (!response.ok) {
         const message = await readAuthError(response);
-        clearAuthState();
+        if (isAuthRejection(response)) {
+          clearAuthState();
+        }
         setAuthError(message);
         authErrorRef.current = message;
         return null;
@@ -617,7 +708,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
       return null;
     } finally {
-      setIsLoading(false);
+      setIsAuthActionLoading(false);
     }
   }, [applyUser, clearAuthState]);
 
@@ -625,34 +716,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     let isMounted = true;
 
     const loadUser = async () => {
-      setIsLoading(true);
-      const storedUser = localStorage.getItem("user");
-      const storedId = localStorage.getItem("active_membership_id");
-
-      if (storedUser) {
-        try {
-          const parsedUser = JSON.parse(storedUser) as User;
-          if (isMounted) {
-            setUser(parsedUser);
-            if (parsedUser.memberships.length > 0) {
-              setActiveMembershipState(
-                parsedUser.memberships.find(
-                  (membership) => membership.id === storedId,
-                ) || parsedUser.memberships[0],
-              );
-            }
-          }
-        } catch {
-          localStorage.removeItem("user");
-        }
-      }
+      setIsInitializing(true);
+      migrateStoredUserContext();
 
       if (getStoredRefreshToken()) {
         await refreshUser();
       } else {
         clearAuthState();
       }
-      if (isMounted) setIsLoading(false);
+      if (isMounted) setIsInitializing(false);
     };
 
     loadUser();
@@ -666,74 +738,150 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     if (isSigningOutRef.current) return;
     isSigningOutRef.current = true;
     clearAuthState();
-    try {
-      router.push("/sign-in");
-    } finally {
-      isSigningOutRef.current = false;
-    }
+    router.push("/sign-in");
   }, [clearAuthState, router]);
 
   useEffect(() => {
-    const handleAuthExpired = () => {
-      if (isSigningOutRef.current) return;
-
-      const signInUrl = buildAuthUrl(
-        "/sign-in",
-        buildCurrentPathRedirect(
-          window.location.pathname,
-          new URLSearchParams(window.location.search),
-        ),
-      );
-
-      isSigningOutRef.current = true;
-      clearAuthState();
-      router.replace(signInUrl);
-      isSigningOutRef.current = false;
-    };
-
-    window.addEventListener("metro:auth-expired", handleAuthExpired);
+    window.addEventListener("metro:auth-expired", expireAuthSession);
     return () => {
-      window.removeEventListener("metro:auth-expired", handleAuthExpired);
+      window.removeEventListener("metro:auth-expired", expireAuthSession);
     };
-  }, [clearAuthState, router]);
+  }, [expireAuthSession]);
 
-  const setActiveMembership = (membership: Membership) => {
+  const setActiveMembership = useCallback((membership: Membership) => {
     setActiveMembershipState(membership);
-    localStorage.setItem("active_membership_id", membership.id);
-  };
+    setStoredActiveContext(membership);
+  }, []);
 
-  const can = (permission: Permission) => {
+  const can = useCallback((permission: Permission) => {
     if (!user) return false;
-    const permissions = user.permissions || [];
+    const permissions =
+      activeMembership?.permissions !== undefined
+        ? activeMembership.permissions
+        : user.permissions || [];
     return permissions.includes("*") || permissions.includes(permission);
-  };
+  }, [activeMembership, user]);
+
+  const value = useMemo(
+    () => ({
+      user,
+      isLoading,
+      isInitializing,
+      isAuthActionLoading,
+      authError,
+      login,
+      loginWithPassword,
+      requestOtp,
+      verifyOtp,
+      startGoogleLogin,
+      exchangeGoogleLogin,
+      exchangeGoogleCode,
+      challengeMfa,
+      verifyMfa,
+      selectOrganization,
+      syncAuthProfile,
+      refreshUser,
+      refreshUserWithError,
+      logout,
+      can,
+      activeMembership,
+      setActiveMembership,
+    }),
+    [
+      user,
+      isLoading,
+      isInitializing,
+      isAuthActionLoading,
+      authError,
+      login,
+      loginWithPassword,
+      requestOtp,
+      verifyOtp,
+      startGoogleLogin,
+      exchangeGoogleLogin,
+      exchangeGoogleCode,
+      challengeMfa,
+      verifyMfa,
+      selectOrganization,
+      syncAuthProfile,
+      refreshUser,
+      refreshUserWithError,
+      logout,
+      can,
+      activeMembership,
+      setActiveMembership,
+    ],
+  );
+  const sessionValue = useMemo(
+    () => ({
+      user,
+      isLoading,
+      isInitializing,
+      isAuthActionLoading,
+      authError,
+      refreshUser,
+      refreshUserWithError,
+    }),
+    [
+      user,
+      isLoading,
+      isInitializing,
+      isAuthActionLoading,
+      authError,
+      refreshUser,
+      refreshUserWithError,
+    ],
+  );
+  const activeMembershipValue = useMemo(
+    () => ({
+      activeMembership,
+      setActiveMembership,
+    }),
+    [activeMembership, setActiveMembership],
+  );
+  const authActionsValue = useMemo(
+    () => ({
+      login,
+      loginWithPassword,
+      requestOtp,
+      verifyOtp,
+      startGoogleLogin,
+      exchangeGoogleLogin,
+      exchangeGoogleCode,
+      challengeMfa,
+      verifyMfa,
+      selectOrganization,
+      syncAuthProfile,
+      logout,
+    }),
+    [
+      login,
+      loginWithPassword,
+      requestOtp,
+      verifyOtp,
+      startGoogleLogin,
+      exchangeGoogleLogin,
+      exchangeGoogleCode,
+      challengeMfa,
+      verifyMfa,
+      selectOrganization,
+      syncAuthProfile,
+      logout,
+    ],
+  );
+  const permissionsValue = useMemo(() => ({ can }), [can]);
 
   return (
-    <AuthContext.Provider
-      value={{
-        user,
-        isLoading,
-        authError,
-        login,
-        loginWithPassword,
-        requestOtp,
-        verifyOtp,
-        startGoogleLogin,
-        exchangeGoogleLogin,
-        exchangeGoogleCode,
-        challengeMfa,
-        verifyMfa,
-        selectOrganization,
-        syncAuthProfile,
-        refreshUser,
-        refreshUserWithError,
-        logout,
-        can,
-        activeMembership,
-        setActiveMembership,
-      }}
-    >
-      {children}
+    <AuthContext.Provider value={value}>
+      <SessionContext.Provider value={sessionValue}>
+        <ActiveMembershipContext.Provider value={activeMembershipValue}>
+          <AuthActionsContext.Provider value={authActionsValue}>
+            <PermissionsContext.Provider value={permissionsValue}>
+              {children}
+            </PermissionsContext.Provider>
+          </AuthActionsContext.Provider>
+        </ActiveMembershipContext.Provider>
+      </SessionContext.Provider>
     </AuthContext.Provider>
   );
 }
@@ -742,6 +890,38 @@ export function useAuth() {
   const context = useContext(AuthContext);
   if (context === undefined) {
     throw new Error("useAuth must be used within an AuthProvider");
+  }
+  return context;
+}
+
+export function useSession() {
+  const context = useContext(SessionContext);
+  if (context === undefined) {
+    throw new Error("useSession must be used within an AuthProvider");
+  }
+  return context;
+}
+
+export function useActiveMembership() {
+  const context = useContext(ActiveMembershipContext);
+  if (context === undefined) {
+    throw new Error("useActiveMembership must be used within an AuthProvider");
+  }
+  return context;
+}
+
+export function useAuthActions() {
+  const context = useContext(AuthActionsContext);
+  if (context === undefined) {
+    throw new Error("useAuthActions must be used within an AuthProvider");
+  }
+  return context;
+}
+
+export function usePermissions() {
+  const context = useContext(PermissionsContext);
+  if (context === undefined) {
+    throw new Error("usePermissions must be used within an AuthProvider");
   }
   return context;
 }

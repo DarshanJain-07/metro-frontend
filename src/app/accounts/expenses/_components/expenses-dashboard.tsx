@@ -27,6 +27,7 @@ import { ExpenseEntryDialog } from "./expense-entry-dialog";
 import { PageHeader } from "@/components/page-header";
 import { Calendar } from "@/components/ui/calendar";
 import { Surface } from "@/components/ui/surface";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 
 interface DailySummary {
   date: string;
@@ -51,16 +52,14 @@ interface ExpenseItem {
   office: string;
 }
 
+const EMPTY_DAILY_SUMMARIES: DailySummary[] = [];
+const EMPTY_BRANCH_SUMMARIES: BranchSummary[] = [];
+const EMPTY_EXPENSES: ExpenseItem[] = [];
+
 export function ExpensesDashboard() {
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   
-  const [dailySummaries, setDailySummaries] = useState<DailySummary[]>([]);
-  const [branchSummaries, setBranchSummaries] = useState<BranchSummary[]>([]);
-  const [expenses, setExpenses] = useState<ExpenseItem[]>([]);
-  
-  const [isLoadingBranches, setIsLoadingBranches] = useState(false);
-  const [isLoadingEntries, setIsLoadingEntries] = useState(false);
   const [isEntryDialogOpen, setIsEntryDialogOpen] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
@@ -72,87 +71,87 @@ export function ExpensesDashboard() {
     return `${year}-${month}-${day}`;
   }, [selectedDate]);
 
-  const selectedBranch = useMemo(() => 
-    branchSummaries.find(b => b.office === selectedBranchId), 
-  [branchSummaries, selectedBranchId]);
-
-  // Load all daily summaries for calendar highlighting
-  useEffect(() => {
-    const loadDailySummaries = async () => {
-      try {
-        const res = await fetchWithAuth("/api/v1/accounts/expenses/daily-summary/");
-        if (res.ok) {
-          const json = await res.json();
-          setDailySummaries(json);
-        }
-      } catch (err) {
-        console.error("Failed to load daily summaries", err);
+  const {
+    data: loadedDailySummaries,
+    error: dailySummariesError,
+  } = useAsyncResource<DailySummary[]>(
+    async ({ signal }) => {
+      const res = await fetchWithAuth("/api/v1/accounts/expenses/daily-summary/", {
+        signal,
+      });
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Could not load daily expense summaries."));
       }
-    };
-    loadDailySummaries();
-  }, [refreshKey]);
+      return res.json();
+    },
+    { deps: [refreshKey], initialData: [] },
+  );
+  const dailySummaries = loadedDailySummaries ?? EMPTY_DAILY_SUMMARIES;
 
-  // Load branches when date changes
-  useEffect(() => {
-    if (formattedDate) {
-      const loadBranches = async () => {
-        setIsLoadingBranches(true);
-        try {
-          const res = await fetchWithAuth(`/api/v1/accounts/expenses/summary/?date=${formattedDate}`);
-          if (res.ok) {
-            const json = await res.json() as BranchSummary[];
-            setBranchSummaries(json);
-            // Auto-select first branch if none selected or if previously selected branch not in new list
-            if (json.length > 0) {
-              if (!selectedBranchId || !json.some((b) => b.office === selectedBranchId)) {
-                setSelectedBranchId(json[0].office);
-              }
-            } else {
-              setSelectedBranchId(null);
-            }
-          } else if (res.status !== 401) {
-            toast.error(await readApiError(res, "Could not load branch summaries."));
-          }
-        } catch {
-          toast.error(
-            "Network error while loading branch summaries. Please check your connection.",
-          );
-        } finally {
-          setIsLoadingBranches(false);
-        }
-      };
-      loadBranches();
+  const {
+    data: loadedBranchSummaries,
+    error: branchSummariesError,
+    isLoading: isLoadingBranches,
+  } = useAsyncResource<BranchSummary[]>(
+    async ({ signal }) => {
+      if (!formattedDate) return [];
+      const res = await fetchWithAuth(
+        `/api/v1/accounts/expenses/summary/?date=${formattedDate}`,
+        { signal },
+      );
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Could not load branch summaries."));
+      }
+      return res.json();
+    },
+    { deps: [formattedDate, refreshKey], initialData: [] },
+  );
+  const branchSummaries = loadedBranchSummaries ?? EMPTY_BRANCH_SUMMARIES;
+
+  const effectiveSelectedBranchId = useMemo(() => {
+    if (!formattedDate || branchSummaries.length === 0) return null;
+    if (
+      selectedBranchId &&
+      branchSummaries.some((branch) => branch.office === selectedBranchId)
+    ) {
+      return selectedBranchId;
     }
-  }, [formattedDate, refreshKey, selectedBranchId]);
+    return branchSummaries[0].office;
+  }, [branchSummaries, formattedDate, selectedBranchId]);
 
-  // Load entries when branch changes
-  useEffect(() => {
-    const loadEntries = async () => {
-      if (!formattedDate || !selectedBranchId) {
-        setExpenses([]);
-        return;
+  const selectedBranch = useMemo(
+    () => branchSummaries.find((branch) => branch.office === effectiveSelectedBranchId),
+    [branchSummaries, effectiveSelectedBranchId],
+  );
+
+  const {
+    data: loadedExpenses,
+    error: expensesError,
+    isLoading: isLoadingEntries,
+  } = useAsyncResource<ExpenseItem[]>(
+    async ({ signal }) => {
+      if (!formattedDate || !effectiveSelectedBranchId) return [];
+      const res = await fetchWithAuth(
+        `/api/v1/accounts/expenses/?date=${formattedDate}&office=${effectiveSelectedBranchId}&limit=1000`,
+        { signal },
+      );
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Could not load expenses."));
       }
+      const json = await res.json();
+      return json.results || json;
+    },
+    { deps: [formattedDate, effectiveSelectedBranchId, refreshKey], initialData: [] },
+  );
+  const expenses = loadedExpenses ?? EMPTY_EXPENSES;
 
-        setIsLoadingEntries(true);
-        try {
-          const res = await fetchWithAuth(`/api/v1/accounts/expenses/?date=${formattedDate}&office=${selectedBranchId}&limit=1000`);
-          if (res.ok) {
-            const json = await res.json();
-            setExpenses(json.results || json);
-          } else if (res.status !== 401) {
-            toast.error(await readApiError(res, "Could not load expenses."));
-          }
-        } catch {
-          toast.error(
-            "Network error while loading expenses. Please check your connection.",
-          );
-        } finally {
-          setIsLoadingEntries(false);
-        }
-    };
-
-    loadEntries();
-  }, [formattedDate, selectedBranchId, refreshKey]);
+  useEffect(() => {
+    [dailySummariesError, branchSummariesError, expensesError].forEach((error) => {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      }
+    });
+  }, [dailySummariesError, branchSummariesError, expensesError]);
 
   const currentDayStats = dailySummaries.find(s => s.date === formattedDate);
 
@@ -246,7 +245,7 @@ export function ExpensesDashboard() {
                 onClick={() => setSelectedBranchId(bs.office)}
                 className={cn(
                   "w-full flex items-center justify-between border-none p-3 transition-colors duration-200 group rounded-md",
-                  selectedBranchId === bs.office 
+                  effectiveSelectedBranchId === bs.office
                     ? "bg-primary text-primary-foreground" 
                     : "hover:bg-muted/50 text-foreground"
                 )}
@@ -254,17 +253,17 @@ export function ExpensesDashboard() {
                 <div className="flex flex-col items-start gap-0.5">
                   <span className={cn(
                     "text-sm font-medium tracking-tight text-left truncate max-w-[180px]",
-                    selectedBranchId === bs.office ? "text-primary-foreground" : "text-foreground"
+                    effectiveSelectedBranchId === bs.office ? "text-primary-foreground" : "text-foreground"
                   )}>{bs.office__name}</span>
                   <span className={cn(
                     "text-sm font-medium opacity-60",
-                    selectedBranchId === bs.office ? "text-primary-foreground" : "text-muted-foreground"
+                    effectiveSelectedBranchId === bs.office ? "text-primary-foreground" : "text-muted-foreground"
                   )}>{bs.entry_count} entries</span>
                 </div>
                 <div className="text-right">
                   <p className={cn(
                     "text-sm font-semibold tracking-tight",
-                    selectedBranchId === bs.office ? "text-primary-foreground" : "text-foreground"
+                    effectiveSelectedBranchId === bs.office ? "text-primary-foreground" : "text-foreground"
                   )}>₹{Number(bs.total_amount).toLocaleString()}</p>
                 </div>
               </button>
@@ -274,7 +273,7 @@ export function ExpensesDashboard() {
 
         {/* Pane 3: Entries Detail (Right) */}
         <Surface variant="elevated" padding="none" className="flex-1 flex flex-col overflow-hidden">
-          {selectedBranchId ? (
+          {effectiveSelectedBranchId ? (
             <>
               <div className="p-6 border-none bg-card/70 flex items-center justify-between">
                 <div className="flex items-center gap-4">

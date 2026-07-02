@@ -28,6 +28,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Surface } from "@/components/ui/surface";
 import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 
 interface CashbookSummary {
   opening_balance: number;
@@ -55,8 +56,6 @@ export function CashbookDashboard() {
     to: new Date()
   });
   
-  const [data, setData] = useState<CashbookData | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [refreshKey, setRefreshKey] = useState(0);
 
   const formattedRange = useMemo(() => {
@@ -65,27 +64,29 @@ export function CashbookDashboard() {
     return { from: fromStr, to: toStr };
   }, [dateRange]);
 
-  useEffect(() => {
-    const loadCashbook = async () => {
-      setIsLoading(true);
-      try {
-        const res = await fetchWithAuth(
-          `/api/v1/accounts/cashbook/?start_date=${formattedRange.from}&end_date=${formattedRange.to}`
-        );
-        if (res.ok) {
-          const json = await res.json();
-          setData(json);
-        } else if (res.status !== 401) {
-          toast.error(await readApiError(res, "Could not load cashbook data."));
-        }
-      } catch {
-        toast.error("Network error while loading cashbook. Please check your connection.");
-      } finally {
-        setIsLoading(false);
+  const { data, error, isLoading, refetch } = useAsyncResource<CashbookData>(
+    async ({ signal }) => {
+      const res = await fetchWithAuth(
+        `/api/v1/accounts/cashbook/?start_date=${formattedRange.from}&end_date=${formattedRange.to}`,
+        { signal },
+      );
+      if (res.status === 401) {
+        throw new Error("Authentication session expired.");
       }
-    };
-    loadCashbook();
-  }, [formattedRange, refreshKey]);
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Could not load cashbook data."));
+      }
+      return res.json();
+    },
+    { deps: [formattedRange.from, formattedRange.to, refreshKey] },
+  );
+
+  useEffect(() => {
+    if (!(error instanceof Error)) return;
+    if (error.message !== "Authentication session expired.") {
+      toast.error(error.message);
+    }
+  }, [error]);
 
   return (
     <div className="flex flex-col h-full overflow-hidden">
@@ -116,7 +117,10 @@ export function CashbookDashboard() {
             <Button 
               variant="secondary" 
               className="h-9"
-              onClick={() => setRefreshKey(k => k + 1)}
+              onClick={() => {
+                setRefreshKey(k => k + 1);
+                refetch();
+              }}
             >
               Refresh
             </Button>

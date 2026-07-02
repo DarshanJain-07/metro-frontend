@@ -12,24 +12,25 @@ import { DataTable, DataTableColumn } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Surface } from "@/components/ui/surface";
+import { useAsyncResource } from "@/hooks/use-async-resource";
+
+function getSelectionKey(queryKey: string, data: DocketsResponse) {
+  return `${queryKey}|${data.results.map((row) => row.id).join(",")}`;
+}
 
 export function BillingList() {
   const { activeMembership } = useAuth();
   const branchId = activeMembership?.branch;
   const searchParams = useSearchParams();
-  const [data, setData] = useState<DocketsResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const searchParamsString = searchParams.toString();
   const [isGenerating, setIsGenerating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const checkboxRef = useRef<HTMLInputElement>(null);
+  const lastSelectionKeyRef = useRef<string | null>(null);
+  const suppressAutoSelectForKeyRef = useRef<string | null>(null);
 
-  useEffect(() => {
-    const fetchData = async () => {
-      setIsLoading(true);
-      setError(null);
-
-      const filters = {
+  const filters = useMemo(
+    () => ({
         page: Number(searchParams.get("page")) || 1,
         page_size: 100, // Show more for billing
         from_date: searchParams.get("from_date") || undefined,
@@ -41,25 +42,52 @@ export function BillingList() {
         due_only: searchParams.get("due_only") === "true",
         status: "BOOKED",
         origin_branch: branchId || undefined,
-      };
+      }),
+    [searchParams, branchId],
+  );
+  const billingQueryKey = useMemo(
+    () => `${branchId || ""}|${searchParamsString}`,
+    [branchId, searchParamsString],
+  );
 
-      const result = await getBillingDockets(filters);
-
+  const {
+    data,
+    error,
+    isLoading,
+    refetch,
+    setData,
+  } = useAsyncResource<DocketsResponse>(
+    async ({ signal }) => {
+      const result = await getBillingDockets(filters, { signal });
       if (result.success && result.data) {
-        setData(result.data);
-        // Initially select all (requirement)
-        setSelectedIds(new Set(result.data.results.map(r => r.id)));
-      } else {
-        setError(result.error || "Could not load billing dockets.");
-        if (result.error !== "Authentication session expired.") {
-          toast.error(result.error || "Could not load billing dockets.");
-        }
+        return result.data;
       }
-      setIsLoading(false);
-    };
+      throw new Error(result.error || "Could not load billing dockets.");
+    },
+    { deps: [billingQueryKey] },
+  );
 
-    fetchData();
-  }, [searchParams, branchId]);
+  useEffect(() => {
+    if (!(error instanceof Error)) return;
+    if (error.message !== "Authentication session expired.") {
+      toast.error(error.message);
+    }
+  }, [error]);
+
+  useEffect(() => {
+    if (!data) return;
+
+    const nextSelectionKey = getSelectionKey(billingQueryKey, data);
+    if (lastSelectionKeyRef.current === nextSelectionKey) return;
+
+    lastSelectionKeyRef.current = nextSelectionKey;
+    if (suppressAutoSelectForKeyRef.current === billingQueryKey) {
+      suppressAutoSelectForKeyRef.current = null;
+      return;
+    }
+
+    setSelectedIds(new Set(data.results.map((row) => row.id)));
+  }, [billingQueryKey, data]);
 
   const toggleAll = () => {
     if (selectedIds.size === data?.results.length) {
@@ -100,24 +128,18 @@ export function BillingList() {
     const result = await generateBillForDockets(Array.from(selectedIds), searchParams.get("customer_id") || undefined);
     if (result.success) {
       toast.success(`Bill generated successfully for ${selectedIds.size} dockets.`);
-      // Refresh to show updated billed state
-      const filters = {
-        page: Number(searchParams.get("page")) || 1,
-        page_size: 100,
-        from_date: searchParams.get("from_date") || undefined,
-        to_date: searchParams.get("to_date") || undefined,
-        search: searchParams.get("search") || undefined,
-        customer_id: searchParams.get("customer_id") || undefined,
-        show_billed: searchParams.get("show_billed") === "true",
-        basis: searchParams.get("basis") || undefined,
-        due_only: searchParams.get("due_only") === "true",
-        status: "BOOKED",
-        origin_branch: branchId || undefined,
-      };
       const refreshResult = await getBillingDockets(filters);
       if (refreshResult.success && refreshResult.data) {
+        lastSelectionKeyRef.current = getSelectionKey(
+          billingQueryKey,
+          refreshResult.data,
+        );
         setData(refreshResult.data);
         setSelectedIds(new Set());
+      } else {
+        suppressAutoSelectForKeyRef.current = billingQueryKey;
+        setSelectedIds(new Set());
+        refetch();
       }
     } else {
       toast.error(result.error || "Could not generate bill.");
@@ -216,7 +238,7 @@ export function BillingList() {
     },
   ];
 
-  if (error) {
+  if (error instanceof Error) {
     return (
       <Surface padding="lg" className="flex flex-col items-center justify-center gap-4 border-2 border-dashed p-12 text-center">
         <div className="h-16 w-16 bg-destructive/10 flex items-center justify-center rounded-full">
@@ -227,10 +249,10 @@ export function BillingList() {
             Connection Error
           </h3>
           <p className="text-sm text-muted-foreground max-w-xs mx-auto mt-1">
-            {error}
+            {error.message}
           </p>
         </div>
-        <Button variant="outline" onClick={() => window.location.reload()}>Try Again</Button>
+        <Button variant="outline" onClick={refetch}>Try Again</Button>
       </Surface>
     );
   }

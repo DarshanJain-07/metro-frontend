@@ -8,6 +8,9 @@ const API_URL: string = envApiUrl;
 
 export { API_URL };
 
+export const ACTIVE_MEMBERSHIP_ID_STORAGE_KEY = "active_membership_id";
+export const ACTIVE_CONTEXT_STORAGE_KEY = "metro:active-context";
+
 type AuthTokenGetter = () => Promise<string | null>;
 type AuthTokenRefresher = () => Promise<string | null>;
 
@@ -118,6 +121,72 @@ export async function readApiError(response: Response, fallback = "Request faile
   });
 }
 
+type ActiveContextSnapshot = {
+  membershipId: string;
+  company: string;
+  branch: string | null;
+};
+
+export type ActiveContextMembership = {
+  id: string;
+  company: number | string;
+  branch?: number | string | null;
+};
+
+function readStoredActiveContext(): ActiveContextSnapshot | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const storedContext = localStorage.getItem(ACTIVE_CONTEXT_STORAGE_KEY);
+  if (!storedContext) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(storedContext) as Partial<ActiveContextSnapshot>;
+    if (!parsed.membershipId || !parsed.company) {
+      return null;
+    }
+
+    return {
+      membershipId: String(parsed.membershipId),
+      company: String(parsed.company),
+      branch:
+        parsed.branch === null || parsed.branch === undefined
+          ? null
+          : String(parsed.branch),
+    };
+  } catch {
+    localStorage.removeItem(ACTIVE_CONTEXT_STORAGE_KEY);
+    return null;
+  }
+}
+
+export function setStoredActiveContext(membership: ActiveContextMembership) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const context: ActiveContextSnapshot = {
+    membershipId: membership.id,
+    company: String(membership.company),
+    branch: membership.branch == null ? null : String(membership.branch),
+  };
+
+  localStorage.setItem(ACTIVE_MEMBERSHIP_ID_STORAGE_KEY, membership.id);
+  localStorage.setItem(ACTIVE_CONTEXT_STORAGE_KEY, JSON.stringify(context));
+}
+
+export function clearStoredActiveContext() {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  localStorage.removeItem(ACTIVE_MEMBERSHIP_ID_STORAGE_KEY);
+  localStorage.removeItem(ACTIVE_CONTEXT_STORAGE_KEY);
+}
+
 export function getActiveContextHeaders() {
   const headers = new Headers();
 
@@ -125,34 +194,12 @@ export function getActiveContextHeaders() {
     return headers;
   }
 
-  const storedUser = localStorage.getItem("user");
-  const activeMembershipId = localStorage.getItem("active_membership_id");
+  const context = readStoredActiveContext();
+  if (!context) return headers;
 
-  if (!storedUser) {
-    return headers;
-  }
-
-  try {
-    const user = JSON.parse(storedUser) as {
-      memberships?: Array<{
-        id: string;
-        company: number | string;
-        branch: string | null;
-      }>;
-    };
-    const memberships = user.memberships || [];
-    const membership =
-      memberships.find((item) => item.id === activeMembershipId) ||
-      memberships[0];
-
-    if (membership?.company) {
-      headers.set("X-Company-ID", String(membership.company));
-    }
-    if (membership?.branch) {
-      headers.set("X-Office-ID", String(membership.branch));
-    }
-  } catch {
-    return headers;
+  headers.set("X-Company-ID", context.company);
+  if (context.branch) {
+    headers.set("X-Office-ID", context.branch);
   }
 
   return headers;
@@ -224,7 +271,7 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
   if (response.status === 401) {
     if (typeof window !== "undefined") {
       localStorage.removeItem("user");
-      localStorage.removeItem("active_membership_id");
+      clearStoredActiveContext();
       window.dispatchEvent(new Event("metro:auth-expired"));
     }
   }

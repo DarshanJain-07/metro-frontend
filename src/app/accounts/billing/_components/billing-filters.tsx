@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter, useSearchParams } from "next/navigation";
-import { useState, useEffect, useCallback } from "react";
+import { useCallback } from "react";
 import { Calendar, CreditCard, Clock, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormLabel } from "@/components/ui/form-elements";
@@ -17,6 +17,7 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { PageHeader } from "@/components/page-header";
 import { getParties } from "../_lib/actions";
 import { Surface } from "@/components/ui/surface";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 
 type Party = {
   id: string;
@@ -32,23 +33,21 @@ export function BillingFilters() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [customerId, setCustomerId] = useState(searchParams.get("customer_id") || "");
-  const [startDate, setStartDate] = useState(formatDateForInput(searchParams.get("from_date") || ""));
-  const [endDate, setEndDate] = useState(formatDateForInput(searchParams.get("to_date") || ""));
-  const [parties, setParties] = useState<Party[]>([]);
+  const customerId = searchParams.get("customer_id") || "";
+  const startDate = formatDateForInput(searchParams.get("from_date") || "");
+  const endDate = formatDateForInput(searchParams.get("to_date") || "");
 
+  const { data: loadedParties } = useAsyncResource<Party[]>(
+    async ({ signal }) => {
+      const result = await getParties({ signal });
+      if (result.success) return result.data;
+      throw new Error(result.error || "Could not load parties.");
+    },
+    { initialData: [] },
+  );
+  const parties = loadedParties ?? [];
   const partyOptions: PartyOption[] = parties.map(p => ({ label: p.name, value: p.id }));
   const selectedCustomer = partyOptions.find(opt => opt.value === customerId) || null;
-
-  useEffect(() => {
-    const loadParties = async () => {
-      const result = await getParties();
-      if (result.success) {
-        setParties(result.data);
-      }
-    };
-    loadParties();
-  }, []);
 
   const updateFilters = useCallback((updates: Record<string, string | null>) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -76,10 +75,7 @@ export function BillingFilters() {
     
     const startStr = start.toISOString().split('T')[0];
     const endStr = end.toISOString().split('T')[0];
-    
-    setStartDate(formatDateForInput(startStr));
-    setEndDate(formatDateForInput(endStr));
-    
+
     updateFilters({ 
       from_date: startStr, 
       to_date: endStr 
@@ -104,7 +100,6 @@ export function BillingFilters() {
             value={selectedCustomer}
             onValueChange={(val: PartyOption | null) => {
               const newId = val?.value || "";
-              setCustomerId(newId);
               updateFilters({ customer_id: newId });
             }}
             itemToStringLabel={(item: PartyOption | null) => item?.label || ""}
@@ -136,7 +131,6 @@ export function BillingFilters() {
           <DatePicker
             value={startDate}
             onChange={(val) => {
-              setStartDate(val);
               updateFilters({ from_date: val });
             }}
             placeholder="Start date"
@@ -151,7 +145,6 @@ export function BillingFilters() {
           <DatePicker
             value={endDate}
             onChange={(val) => {
-              setEndDate(val);
               updateFilters({ to_date: val });
             }}
             placeholder="End date"
@@ -173,9 +166,6 @@ export function BillingFilters() {
             variant="ghost" 
             size="sm"
             onClick={() => {
-              setCustomerId("");
-              setStartDate("");
-              setEndDate("");
               router.push("/accounts/billing");
             }} 
             className="h-9 px-4 gap-2 text-muted-foreground hover:text-foreground w-fit font-medium"

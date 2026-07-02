@@ -7,6 +7,7 @@ import { PageContainer } from "@/components/page-container";
 import { Button } from "@/components/ui/button";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 import {
   Sheet,
   SheetContent,
@@ -55,53 +56,64 @@ interface EffectiveRolePermission {
 
 export default function UsersPage() {
   const { can } = useAuth();
-  const [catalog, setCatalog] = useState<Permission[]>([]);
-  const [roles, setRoles] = useState<RoleDefinition[]>([]);
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [isTemplatesOpen, setIsTemplatesOpen] = useState(false);
   const [role, setRole] = useState<Role | null>(null);
-  const [permissions, setPermissions] = useState<Record<string, PermissionState>>({});
-  const [isLoading, setIsLoading] = useState(false);
+  const [permissionOverrides, setPermissionOverrides] = useState<{
+    role: Role;
+    permissions: Record<string, PermissionState>;
+  } | null>(null);
+  const [isMutatingPermissions, setIsMutatingPermissions] = useState(false);
   const [savingCode, setSavingCode] = useState<string | null>(null);
   const [clipboard, setClipboard] = useState<Record<string, PermissionState> | null>(null);
 
   const canManageRoles = can("roles:manage");
 
-  useEffect(() => {
-    if (!canManageRoles) return;
-
-    async function loadAdminData() {
+  const {
+    data: adminData,
+    error: adminDataError,
+  } = useAsyncResource<{ catalog: Permission[]; roles: RoleDefinition[] }>(
+    async ({ signal }) => {
       const [catalogResponse, rolesResponse] = await Promise.all([
-        fetchWithAuth("/api/v1/auth/permission-catalog/"),
-        fetchWithAuth("/api/v1/auth/roles/"),
+        fetchWithAuth("/api/v1/auth/permission-catalog/", { signal }),
+        fetchWithAuth("/api/v1/auth/roles/", { signal }),
       ]);
       if (!catalogResponse.ok) {
-        toast.error("Could not load permissions catalog.");
-      } else {
-        const payload = await catalogResponse.json();
-        setCatalog(payload.results || payload);
+        throw new Error("Could not load permissions catalog.");
       }
       if (!rolesResponse.ok) {
-        toast.error("Could not load roles.");
-      } else {
-        const payload = await rolesResponse.json();
-        setRoles(payload.results || payload);
+        throw new Error("Could not load roles.");
       }
-    }
 
-    loadAdminData();
-  }, [canManageRoles]);
+      const catalogPayload = await catalogResponse.json();
+      const rolesPayload = await rolesResponse.json();
+      return {
+        catalog: catalogPayload.results || catalogPayload,
+        roles: rolesPayload.results || rolesPayload,
+      };
+    },
+    {
+      enabled: canManageRoles,
+      deps: [canManageRoles],
+      initialData: { catalog: [], roles: [] },
+    },
+  );
+  const catalog = adminData?.catalog ?? [];
+  const roles = adminData?.roles ?? [];
 
-  useEffect(() => {
-    if (!canManageRoles || !role) return;
-
-    async function loadEffectivePermissions() {
-      setIsLoading(true);
-      const response = await fetchWithAuth(`/api/v1/auth/company-role-permissions/?role=${role}`);
-      setIsLoading(false);
+  const {
+    data: loadedPermissions,
+    error: permissionsError,
+    isLoading,
+    refetch: refetchRolePermissions,
+  } = useAsyncResource<Record<string, PermissionState>>(
+    async ({ signal }) => {
+      if (!role) return {};
+      const response = await fetchWithAuth(`/api/v1/auth/company-role-permissions/?role=${role}`, {
+        signal,
+      });
       if (!response.ok) {
-        toast.error("Could not load role permissions.");
-        return;
+        throw new Error("Could not load role permissions.");
       }
       const payload = await response.json();
       const perms = (payload[0]?.permissions || []) as EffectiveRolePermission[];
@@ -116,11 +128,27 @@ export default function UsersPage() {
           nextState[p.code] = { enabled: true, scope: p.scope };
         });
       }
-      setPermissions(nextState);
-    }
+      return nextState;
+    },
+    {
+      enabled: canManageRoles && !!role,
+      deps: [canManageRoles, role, catalog],
+      initialData: {},
+    },
+  );
 
-    loadEffectivePermissions();
-  }, [canManageRoles, role, catalog]);
+  const permissions =
+    permissionOverrides?.role === role
+      ? permissionOverrides.permissions
+      : loadedPermissions ?? {};
+
+  useEffect(() => {
+    [adminDataError, permissionsError].forEach((error) => {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      }
+    });
+  }, [adminDataError, permissionsError]);
 
   async function handleToggle(code: string, enabled: boolean) {
     if (!role || role === METRO_ROLE) return;
@@ -144,14 +172,16 @@ export default function UsersPage() {
       return;
     }
 
-    setPermissions(prev => {
+    setPermissionOverrides(prevOverrides => {
+      const prev =
+        prevOverrides?.role === role ? prevOverrides.permissions : permissions;
       const next = { ...prev };
       if (enabled) {
         next[code] = { enabled: true, scope };
       } else {
         delete next[code];
       }
-      return next;
+      return { role, permissions: next };
     });
     toast.success(`${enabled ? 'Enabled' : 'Disabled'} permission.`);
   }
@@ -164,26 +194,38 @@ export default function UsersPage() {
   const handlePaste = async () => {
     if (!clipboard || !role || role === METRO_ROLE) return;
     
-    setIsLoading(true);
-    const codes = Object.keys(clipboard);
-    const results = await Promise.all(codes.map(code => 
-      fetchWithAuth("/api/v1/auth/company-role-overrides/", {
-        method: "POST",
-        body: JSON.stringify({
-          role,
-          permission_code: code,
-          enabled: clipboard[code].enabled,
-          scope: clipboard[code].scope,
-        }),
-      })
-    ));
+    setIsMutatingPermissions(true);
 
-    setIsLoading(false);
-    if (results.every(r => r.ok)) {
-      setPermissions({ ...clipboard });
-      toast.success("Permissions pasted successfully.");
-    } else {
-      toast.error("Some permissions could not be pasted.");
+    try {
+      const results = await Promise.all(
+        catalog.map((permission) => {
+          const state = clipboard[permission.code];
+          return fetchWithAuth("/api/v1/auth/company-role-overrides/", {
+            method: "POST",
+            body: JSON.stringify({
+              role,
+              permission_code: permission.code,
+              enabled: !!state?.enabled,
+              scope: state?.scope || "branch",
+            }),
+          });
+        }),
+      );
+
+      if (results.every(r => r.ok)) {
+        setPermissionOverrides({ role, permissions: { ...clipboard } });
+        toast.success("Permissions pasted successfully.");
+      } else {
+        setPermissionOverrides(null);
+        refetchRolePermissions();
+        toast.error("Some permissions could not be pasted.");
+      }
+    } catch {
+      setPermissionOverrides(null);
+      refetchRolePermissions();
+      toast.error("Could not paste permissions.");
+    } finally {
+      setIsMutatingPermissions(false);
     }
   };
 
@@ -264,7 +306,7 @@ export default function UsersPage() {
                   onToggle={handleToggle}
                   onCopy={handleCopy}
                   onPaste={handlePaste}
-                  isSaving={!!savingCode || isLoading}
+                  isSaving={!!savingCode || isLoading || isMutatingPermissions}
                   readOnly={role === METRO_ROLE}
                 />
               </>

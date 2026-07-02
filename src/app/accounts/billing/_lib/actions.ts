@@ -37,7 +37,7 @@ export interface BillingFilters {
   due_only?: boolean;
 }
 
-export async function getBillingDockets(filters: BillingFilters): Promise<{
+export async function getBillingDockets(filters: BillingFilters, options?: RequestInit): Promise<{
   success: boolean;
   data?: DocketsResponse;
   error?: string;
@@ -65,7 +65,7 @@ export async function getBillingDockets(filters: BillingFilters): Promise<{
   const path = `/api/v1/shipments/?${searchParams.toString()}`;
 
   try {
-    const response = await fetchWithAuth(path);
+    const response = await fetchWithAuth(path, options);
     const result = await response.json().catch(() => ({}));
 
     if (response.status === 401) {
@@ -89,7 +89,10 @@ export async function getBillingDockets(filters: BillingFilters): Promise<{
       success: true,
       data: result,
     };
-  } catch {
+  } catch (error) {
+    if (options?.signal?.aborted) {
+      throw error;
+    }
     return {
       success: false,
       error: "Network error while loading billing dockets. Please check your connection.",
@@ -127,9 +130,9 @@ export async function generateBillForDockets(docketIds: string[], customerId?: s
   }
 }
 
-export async function getParties() {
+export async function getParties(options?: RequestInit) {
   try {
-    const response = await fetchWithAuth("/api/v1/master/parties/?page_size=1000");
+    const response = await fetchWithAuth("/api/v1/master/parties/?page_size=1000", options);
     const result = await response.json().catch(() => ({}));
 
     if (response.ok) {
@@ -145,7 +148,10 @@ export async function getParties() {
         fallback: "Could not load parties.",
       }),
     };
-  } catch {
+  } catch (error) {
+    if (options?.signal?.aborted) {
+      throw error;
+    }
     return {
       success: false,
       error: "Network error while loading parties. Please check your connection.",

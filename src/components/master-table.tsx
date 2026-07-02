@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Plus, Edit, Loader2, Search, Upload } from "lucide-react";
@@ -23,6 +23,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, DataTableColumn } from "@/components/data-table";
 import { ImportDialog } from "./import-dialog";
+import { useAsyncResource } from "@/hooks/use-async-resource";
 
 export interface ColumnDef<T> {
   header: string;
@@ -94,8 +95,6 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
       ? searchDraft.value
       : urlSearchQuery;
 
-  const [data, setData] = useState<T[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isImportOpen, setIsImportOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<T | null>(null);
@@ -103,9 +102,20 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
     Record<string, string | number | boolean | null>
   >({});
   const [isSubmitting, setIsSubmitting] = useState(false);
-  const [dynamicOptions, setDynamicOptions] = useState<
-    Record<string, { label: string; value: string | number }[]>
-  >({});
+  const optionFields = useMemo(
+    () =>
+      formFields.filter(
+        (field) => field.type === "select" && field.optionsPath,
+      ),
+    [formFields],
+  );
+  const optionsKey = useMemo(
+    () =>
+      optionFields
+        .map((field) => `${field.name}:${field.optionsPath}`)
+        .join("|"),
+    [optionFields],
+  );
 
   const extraQuery = new URLSearchParams();
   Object.entries(queryParams || {}).forEach(([key, value]) => {
@@ -119,27 +129,64 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
   const queryString = extraQuery.toString();
   const apiPath = baseApiPath + (queryString ? `${baseApiPath.includes("?") ? "&" : "?"}${queryString}` : "");
 
-  const loadData = useCallback(async () => {
-    try {
-      const res = await fetchWithAuth(apiPath);
-      if (res.status === 401) return;
-      if (!res.ok) throw new Error(await readApiError(res, `Could not load ${title.toLowerCase()}.`));
+  const {
+    data: loadedData,
+    error: dataError,
+    isLoading,
+    refetch: refetchData,
+  } = useAsyncResource<T[]>(
+    async ({ signal }) => {
+      const res = await fetchWithAuth(apiPath, { signal });
+      if (res.status === 401) {
+        throw new Error("Authentication session expired.");
+      }
+      if (!res.ok) {
+        throw new Error(await readApiError(res, `Could not load ${title.toLowerCase()}.`));
+      }
       const json = await res.json();
-      setData(json.results || json);
-    } catch (err) {
-      toast.error(
-        err instanceof Error ? err.message : `Could not load ${title.toLowerCase()}.`,
+      return json.results || json;
+    },
+    { deps: [apiPath, refreshKey], initialData: [] },
+  );
+  const data = loadedData ?? [];
+
+  const {
+    data: loadedDynamicOptions,
+  } = useAsyncResource<Record<string, { label: string; value: string | number }[]>>(
+    async ({ signal }) => {
+      const loadedOptions: Record<string, { label: string; value: string | number }[]> = {};
+
+      await Promise.all(
+        optionFields.map(async (field) => {
+          if (!field.optionsPath) return;
+          const res = await fetchWithAuth(field.optionsPath, { signal });
+          if (res.status === 401) return;
+          if (!res.ok) return;
+          const json = (await res.json()) as OptionResponse;
+          const results = Array.isArray(json) ? json : json.results || [];
+          loadedOptions[field.name] = results.map((item) => ({
+            label: String(item.name || item.label || item.title || "Unknown"),
+            value: item.id || item.value || "",
+          }));
+        }),
       );
-      console.error(err);
-    } finally {
-      setIsLoading(false);
-    }
-  }, [apiPath, setData, title]);
+
+      return loadedOptions;
+    },
+    {
+      deps: [optionsKey],
+      enabled: optionFields.length > 0,
+      initialData: {},
+    },
+  );
+  const dynamicOptions = loadedDynamicOptions ?? {};
 
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadData();
-  }, [loadData, refreshKey]);
+    if (!(dataError instanceof Error)) return;
+    if (dataError.message !== "Authentication session expired.") {
+      toast.error(dataError.message);
+    }
+  }, [dataError]);
 
   const handleSearch = (query: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -148,35 +195,6 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
     params.set("page", "1");
     router.push("?" + params.toString());
   };
-
-  useEffect(() => {
-    formFields.forEach(async (field) => {
-      if (
-        field.type === "select" &&
-        field.optionsPath &&
-        !dynamicOptions[field.name]
-      ) {
-        try {
-          const res = await fetchWithAuth(field.optionsPath);
-          if (res.status === 401) return;
-          if (res.ok) {
-            const json = (await res.json()) as OptionResponse;
-            const results = Array.isArray(json) ? json : json.results || [];
-            const options = results.map((item) => ({
-              label: String(item.name ||
-                item.label ||
-                item.title ||
-                "Unknown"),
-              value: item.id || item.value || "",
-            }));
-            setDynamicOptions((prev) => ({ ...prev, [field.name]: options }));
-          }
-        } catch (err) {
-          console.error("Failed to fetch options for " + field.name, err);
-        }
-      }
-    });
-  }, [formFields, dynamicOptions]);
 
   const handleOpenDialog = (item?: T) => {
     if (item) {
@@ -245,8 +263,7 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
 
       toast.success(title + " saved successfully");
       setIsDialogOpen(false);
-      setIsLoading(true);
-      loadData();
+      refetchData();
     } catch (err) {
       const errorMessage =
         err instanceof Error
@@ -277,8 +294,7 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
       const created = await res.json().catch(() => []);
       const count = Array.isArray(created) ? created.length : importData.length;
       toast.success(`Successfully imported ${count} items`);
-      setIsLoading(true);
-      loadData();
+      refetchData();
     } catch (err) {
       toast.error(
         err instanceof Error

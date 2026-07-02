@@ -1171,27 +1171,37 @@ export function DocketFormClient({
     }
 
     setIsSubmitting(true);
+    let resetSubmitting = true;
 
-    const token = await getAuthToken();
-    if (!token) {
-      toast.error("Session expired.");
-      router.push("/");
-      return;
-    }
+    try {
+      const token = await getAuthToken();
+      if (!token) {
+        toast.error("Session expired.");
+        router.push("/");
+        return;
+      }
 
-    const result = docketId
-      ? await updateDocket(docketId, data, token)
-      : await createDocket(data, token);
+      const result = docketId
+        ? await updateDocket(docketId, data, token)
+        : await createDocket(data, token);
 
-    if (result.success) {
-      toast.success(`Docket ${docketId ? "updated" : "created"} successfully!`);
-      setTimeout(() => {
-        router.push("/dockets");
-        router.refresh();
-      }, 1500);
-    } else {
-      toast.error(result.error || "Failed to save");
-      setIsSubmitting(false);
+      if (result.success) {
+        resetSubmitting = false;
+        toast.success(`Docket ${docketId ? "updated" : "created"} successfully!`);
+        setTimeout(() => {
+          router.push("/dockets");
+          router.refresh();
+        }, 1500);
+      } else {
+        toast.error(result.error || "Failed to save");
+      }
+    } catch (error) {
+      console.error("Docket save error:", error);
+      toast.error("Failed to save");
+    } finally {
+      if (resetSubmitting) {
+        setIsSubmitting(false);
+      }
     }
   };
 
