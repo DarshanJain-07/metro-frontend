@@ -106,7 +106,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       <div className="min-h-0 flex-1 flex overflow-hidden bg-background">
         <Sidebar />
         <main className="min-h-0 flex-1 overflow-hidden">
-          <div className="animate-fade-in h-full flex flex-col">
+          <div className="app-content-density animate-fade-in h-full flex flex-col">
             {isLoading ? (
               <ContentSkeleton />
             ) : !user && authError ? (

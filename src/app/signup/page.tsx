@@ -45,8 +45,8 @@ export default function SignupPage() {
   };
 
   return (
-    <div className="min-h-full bg-background flex items-center justify-center p-6">
-      <div className="w-full max-w-[520px] animate-slide-up">
+    <div className="min-h-full bg-background flex items-center justify-center p-4 sm:p-6">
+      <div className="w-full max-w-[460px] animate-slide-up">
         <PageHeader title="Sign Up" className="mb-6" />
         <Surface variant="elevated" padding="lg">
           <form onSubmit={handleSubmit} className="grid gap-5">

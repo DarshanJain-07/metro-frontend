@@ -88,6 +88,10 @@ function formatApiErrorValue(value: ApiErrorValue | undefined): string | null {
   return String(value);
 }
 
+function isRowMetadataKey(key: string) {
+  return ["row", "row_number", "line", "index"].includes(key);
+}
+
 export function formatApiErrorPayload(
   payload: ApiErrorValue | object | undefined,
   fallback = "Request failed.",
@@ -111,12 +115,22 @@ export function formatApiErrorPayload(
   const nonFieldErrors = formatApiErrorValue(error.non_field_errors);
   if (nonFieldErrors) return nonFieldErrors;
 
-  const firstEntry = Object.entries(error).find(([, value]) => Boolean(value));
-  if (!firstEntry) return fallback;
+  const rowContext = Object.entries(error).find(
+    ([key, value]) => isRowMetadataKey(key) && value !== undefined && value !== null,
+  );
+  const firstEntry = Object.entries(error).find(
+    ([key, value]) => !isRowMetadataKey(key) && Boolean(value),
+  );
+  if (!firstEntry) {
+    return rowContext ? `row ${rowContext[1]}` : fallback;
+  }
 
   const [field, value] = firstEntry;
   const message = formatApiErrorValue(value);
-  return message ? `${field}: ${message}` : fallback;
+  if (!message) return fallback;
+
+  const fieldMessage = field === "errors" ? message : `${field}: ${message}`;
+  return rowContext ? `row ${rowContext[1]}: ${fieldMessage}` : fieldMessage;
 }
 
 export function getApiErrorMessage(
@@ -155,8 +169,17 @@ function isAbsoluteUrl(path: string) {
   return /^https?:\/\//i.test(path);
 }
 
+function removeTrailingSlash(pathname: string) {
+  return pathname.length > 1 && pathname.endsWith("/")
+    ? pathname.slice(0, -1)
+    : pathname;
+}
+
 export function resolveBackendProxyPath(path: string) {
-  if (path.startsWith("/api/backend/")) return path;
+  if (path.startsWith("/api/backend/")) {
+    const url = new URL(path, "http://metro.local");
+    return `${removeTrailingSlash(url.pathname)}${url.search}`;
+  }
 
   if (isAbsoluteUrl(path)) {
     const backendUrl = new URL(API_URL);
@@ -166,11 +189,12 @@ export function resolveBackendProxyPath(path: string) {
       throw new Error("Only configured backend URLs can be proxied.");
     }
 
-    return `/api/backend${url.pathname}${url.search}`;
+    return `/api/backend${removeTrailingSlash(url.pathname)}${url.search}`;
   }
 
   const normalizedPath = path.startsWith("/") ? path : `/${path}`;
-  return `/api/backend${normalizedPath}`;
+  const url = new URL(normalizedPath, "http://metro.local");
+  return `/api/backend${removeTrailingSlash(url.pathname)}${url.search}`;
 }
 
 export async function fetchWithAuth(path: string, options: RequestInit = {}) {

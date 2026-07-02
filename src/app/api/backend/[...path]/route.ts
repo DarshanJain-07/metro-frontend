@@ -7,12 +7,14 @@ import {
   setAuthCookies,
 } from "@/lib/server-auth";
 
-async function proxyBackendRequest(
-  request: NextRequest,
-  context: { params: Promise<{ path?: string[] }> },
-) {
-  const { path = [] } = await context.params;
-  const backendPath = `/${path.join("/")}`;
+function appendTrailingSlash(path: string) {
+  return path.endsWith("/") ? path : `${path}/`;
+}
+
+async function proxyBackendRequest(request: NextRequest) {
+  const backendPath = appendTrailingSlash(
+    request.nextUrl.pathname.replace(/^\/api\/backend(?=\/|$)/, ""),
+  );
   const method = request.method.toUpperCase();
   const body =
     method === "GET" || method === "HEAD"

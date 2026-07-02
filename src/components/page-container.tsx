@@ -22,7 +22,7 @@ export function PageContainer({ children, className, maxWidth = "full", ...props
 
   return (
     <div 
-      className={cn("mx-auto w-full h-full flex flex-col px-4 py-4 md:px-6 md:py-6", maxWidthClass, className)} 
+      className={cn("mx-auto w-full h-full flex flex-col px-3 py-3 md:px-5 md:py-4", maxWidthClass, className)}
       {...props}
     >
       {children}

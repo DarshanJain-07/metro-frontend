@@ -14,9 +14,9 @@ const surfaceVariants = cva("rounded-md border border-border", {
     },
     padding: {
       none: "p-0",
-      sm: "p-3",
-      md: "p-4 md:p-5",
-      lg: "p-6",
+      sm: "p-2.5",
+      md: "p-3 md:p-4",
+      lg: "p-5",
     },
   },
   defaultVariants: {
@@ -54,7 +54,7 @@ function SectionTitle({
     <div
       data-slot="section-title"
       className={cn(
-        "mb-3 flex items-center gap-2 pb-1 text-sm font-medium uppercase tracking-wider text-muted-foreground",
+        "mb-2.5 flex items-center gap-2 pb-1 text-xs font-medium uppercase tracking-wider text-muted-foreground",
         className,
       )}
       {...props}

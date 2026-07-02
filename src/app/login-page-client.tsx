@@ -238,8 +238,8 @@ export function LoginPageClient() {
   const firstMfaFactor = pendingAuth?.authentication_factors?.[0];
 
   return (
-    <div className="min-h-full bg-background flex items-center justify-center p-6">
-      <div className="w-full max-w-115 animate-slide-up">
+    <div className="min-h-full bg-background flex items-center justify-center p-4 sm:p-6">
+      <div className="w-full max-w-[460px] animate-slide-up">
         <PageHeader title="Sign In" className="mb-6" />
         <Surface variant="elevated" padding="lg">
           <div className="grid gap-5">

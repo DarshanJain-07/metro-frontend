@@ -1,10 +1,24 @@
 "use client";
 
-import { useCallback, useState, useEffect, useMemo } from "react";
+import {
+  isValidElement,
+  useCallback,
+  useState,
+  useEffect,
+  useMemo,
+  type FormEvent,
+  type ReactNode,
+} from "react";
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Plus, Edit, Loader2, Search, Upload } from "lucide-react";
+import { Plus, Edit, Loader2, Search, Upload, Download, FileSpreadsheet } from "lucide-react";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   Dialog,
   DialogContent,
@@ -36,7 +50,7 @@ export interface ColumnDef<T> {
     value: T[keyof T] | undefined,
     row: T,
     index: number,
-  ) => React.ReactNode;
+  ) => ReactNode;
 }
 
 export interface FormFieldDef {
@@ -64,10 +78,62 @@ interface MasterTableProps<T> {
   canEdit?: boolean;
   searchPlaceholder?: string;
   refreshKey?: number;
-  extraActions?: React.ReactNode;
+  extraActions?: ReactNode;
   onAddClick?: () => void;
   onRowClick?: (row: T) => void;
 }
+
+type ExportFormat = "csv" | "xls";
+
+const DUPLICATE_IMPORT_ERROR_PATTERN =
+  /\b(duplicate|already exists|already exist|unique|must be unique|conflicts with existing)\b/i;
+
+const formatImportErrorMessage = (message: string, title: string) => {
+  if (!DUPLICATE_IMPORT_ERROR_PATTERN.test(message)) return message;
+  return `Duplicate entry found in ${title.toLowerCase()}: ${message}`;
+};
+
+const formatExportValue = (value: unknown): string => {
+  if (value === null || value === undefined) return "";
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (value instanceof Date) return value.toISOString();
+  if (typeof value === "object") return JSON.stringify(value);
+  return String(value);
+};
+
+const reactNodeToText = (node: ReactNode): string => {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number" || typeof node === "bigint") {
+    return String(node);
+  }
+  if (Array.isArray(node)) return node.map(reactNodeToText).join(" ").trim();
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    return reactNodeToText(node.props.children);
+  }
+  return "";
+};
+
+const escapeCsvCell = (value: string) => {
+  if (!/[",\r\n]/.test(value)) return value;
+  return `"${value.replace(/"/g, '""')}"`;
+};
+
+const escapeHtmlCell = (value: string) =>
+  value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+
+const makeExportFileName = (title: string, extension: ExportFormat) => {
+  const baseName = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  const date = new Date().toISOString().slice(0, 10);
+  return `${baseName || "export"}-${date}.${extension}`;
+};
 
 export function MasterTable<T extends { id: string; updated_at?: string | null }>({
   title,
@@ -150,7 +216,7 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
     },
     placeholderData: keepPreviousData,
   });
-  const data = listQuery.data ?? [];
+  const data = useMemo<T[]>(() => listQuery.data ?? [], [listQuery.data]);
 
   const dynamicOptionsQuery = useQuery({
     queryKey: [
@@ -286,7 +352,8 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
       }
 
       if (!res.ok) {
-        throw new Error(await readApiError(res, `Could not import ${title.toLowerCase()}.`));
+        const message = await readApiError(res, `Could not import ${title.toLowerCase()}.`);
+        throw new Error(formatImportErrorMessage(message, title));
       }
 
       return {
@@ -323,7 +390,7 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
     className: col.header === "Sr No." ? "font-mono" : "",
   }));
 
-  const handleSave = async (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSave = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const isUpdate = !!editingItem;
     let url = baseApiPath;
@@ -342,6 +409,66 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
   const handleImport = async (importData: ImportRow[]) => {
     await importMutation.mutateAsync(importData).catch(() => undefined);
   };
+
+  const getExportRows = useCallback(() => {
+    return data.map((row: T, rowIndex: number) =>
+      columns.map((column) => {
+        const value = column.accessorKey ? row[column.accessorKey] : undefined;
+        if (column.render) {
+          const rendered = column.render(value, row, rowIndex);
+          const text = reactNodeToText(rendered);
+          if (text) return text;
+        }
+        return formatExportValue(value);
+      }),
+    );
+  }, [columns, data]);
+
+  const handleExport = useCallback(
+    (format: ExportFormat) => {
+      const headers = columns.map((column) => column.header);
+      const rows = getExportRows();
+
+      if (rows.length === 0) {
+        toast.error(`No ${title.toLowerCase()} data to export.`);
+        return;
+      }
+
+      const content =
+        format === "csv"
+          ? "\uFEFF" +
+            [headers, ...rows]
+              .map((row) => row.map((cell) => escapeCsvCell(cell)).join(","))
+              .join("\r\n")
+          : `<!doctype html><html><head><meta charset="utf-8" /></head><body><table><thead><tr>${headers
+              .map((header) => `<th>${escapeHtmlCell(header)}</th>`)
+              .join("")}</tr></thead><tbody>${rows
+              .map(
+                (row) =>
+                  `<tr>${row
+                    .map((cell) => `<td>${escapeHtmlCell(cell)}</td>`)
+                    .join("")}</tr>`,
+              )
+              .join("")}</tbody></table></body></html>`;
+
+      const blob = new Blob([content], {
+        type:
+          format === "csv"
+            ? "text/csv;charset=utf-8"
+            : "application/vnd.ms-excel;charset=utf-8",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = makeExportFileName(title, format);
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      toast.success(`Exported ${rows.length} ${title.toLowerCase()} row${rows.length === 1 ? "" : "s"}.`);
+    },
+    [columns, getExportRows, title],
+  );
 
   return (
     <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
@@ -366,8 +493,32 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
                 }}
               />
             </div>
-            {canAdd && (
-              <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="font-semibold shrink-0"
+                    disabled={listQuery.isLoading || data.length === 0}
+                  >
+                    <Download className="h-4 w-4 mr-2" />
+                    Export
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => handleExport("csv")}>
+                    <FileSpreadsheet className="h-4 w-4" />
+                    CSV
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => handleExport("xls")}>
+                    <FileSpreadsheet className="h-4 w-4" />
+                    XLS
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {canAdd && (
+                <>
                 <Button
                   variant="outline"
                   size="sm"
@@ -387,9 +538,10 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
                   <Plus className="h-4 w-4 mr-2" />
                   Add {title}
                 </Button>
-                {extraActions}
-              </div>
-            )}
+                </>
+              )}
+              {extraActions}
+            </div>
           </div>
         }
       />
