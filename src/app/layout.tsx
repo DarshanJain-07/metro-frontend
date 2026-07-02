@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
 import { Suspense } from "react";
+import { dehydrate } from "@tanstack/react-query";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
@@ -9,6 +10,10 @@ import { AppShell } from "@/components/app-shell";
 import { AppSkeleton } from "@/components/app-skeleton";
 import { PwaRegister } from "@/components/pwa-register";
 import { AuthProvider } from "@/lib/auth-context";
+import { authKeys } from "@/lib/query-keys";
+import { makeQueryClient } from "@/lib/query-client";
+import { QueryProvider } from "@/lib/query-provider";
+import { getServerAuthSession, hasAuthCookies } from "@/lib/server-auth";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -37,6 +42,29 @@ export const metadata: Metadata = {
   },
 };
 
+async function HydratedApp({ children }: { children: React.ReactNode }) {
+  const queryClient = makeQueryClient();
+
+  if (await hasAuthCookies()) {
+    await queryClient
+      .prefetchQuery({
+        queryKey: authKeys.session(),
+        queryFn: getServerAuthSession,
+      })
+      .catch(() => undefined);
+  }
+
+  return (
+    <QueryProvider dehydratedState={dehydrate(queryClient)}>
+      <AuthProvider>
+        <PwaRegister />
+        <AppShell>{children}</AppShell>
+        <Toaster />
+      </AuthProvider>
+    </QueryProvider>
+  );
+}
+
 export default function RootLayout({
   children,
 }: Readonly<{
@@ -51,11 +79,7 @@ export default function RootLayout({
       <body className="h-screen overflow-hidden flex flex-col tracking-tight antialiased text-sm">
         <ThemeProvider defaultTheme="system">
           <Suspense fallback={<AppSkeleton />}>
-            <AuthProvider>
-              <PwaRegister />
-              <AppShell>{children}</AppShell>
-              <Toaster />
-            </AuthProvider>
+            <HydratedApp>{children}</HydratedApp>
           </Suspense>
         </ThemeProvider>
       </body>

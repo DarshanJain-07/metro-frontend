@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useForm, useFieldArray, FormProvider, useWatch, type Resolver } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -30,6 +30,8 @@ import { Plus, Trash2, Loader2, Calendar, Building2 } from "lucide-react";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/lib/auth-context";
+import { masterKeys } from "@/lib/query-keys";
 
 const expenseRowSchema = z.object({
   category: z.string().min(1, "Category is required"),
@@ -57,8 +59,7 @@ type OfficeOptionApi = {
 };
 
 export function ExpenseEntryDialog({ isOpen, onOpenChange, onSuccess }: ExpenseEntryDialogProps) {
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [officeOptions, setOfficeOptions] = useState<{ label: string; value: string | number }[]>([]);
+  const { activeMembership } = useAuth();
 
   const methods = useForm<ExpenseEntryValues>({
     resolver: zodResolver(expenseEntrySchema) as Resolver<ExpenseEntryValues>,
@@ -76,27 +77,26 @@ export function ExpenseEntryDialog({ isOpen, onOpenChange, onSuccess }: ExpenseE
   });
   const selectedOffice = useWatch({ control, name: "office" });
 
-  useEffect(() => {
-    if (isOpen) {
-      const loadOffices = async () => {
-        try {
-          const res = await fetchWithAuth("/api/v1/master/offices/");
-          if (res.ok) {
-            const json = await res.json();
-            const results = (json.results || json) as OfficeOptionApi[];
-            setOfficeOptions(results.map(o => ({ label: o.name, value: o.id })));
-          }
-        } catch (err) {
-          console.error("Failed to load offices", err);
-        }
-      };
-      loadOffices();
-    }
-  }, [isOpen]);
+  const { data: officeOptions = [] } = useQuery({
+    queryKey: masterKeys.options(activeMembership?.id, "expense-offices"),
+    queryFn: async () => {
+      const res = await fetchWithAuth("/api/v1/master/offices/");
+      if (!res.ok) {
+        throw new Error(await readApiError(res, "Could not load offices."));
+      }
+      const json = await res.json();
+      const results = (json.results || json) as OfficeOptionApi[];
+      return results.map((office) => ({
+        label: office.name,
+        value: office.id,
+      }));
+    },
+    enabled: isOpen,
+    initialData: [] as { label: string; value: string | number }[],
+  });
 
-  const onSubmit = async (data: ExpenseEntryValues) => {
-    setIsSubmitting(true);
-    try {
+  const saveExpensesMutation = useMutation({
+    mutationFn: async (data: ExpenseEntryValues) => {
       const payload = data.expenses.map(exp => ({
         date: data.date,
         office: data.office,
@@ -112,19 +112,25 @@ export function ExpenseEntryDialog({ isOpen, onOpenChange, onSuccess }: ExpenseE
         throw new Error(await readApiError(res, "Could not save expenses."));
       }
 
-      toast.success(`Successfully saved ${payload.length} expenses`);
+      return payload.length;
+    },
+    onSuccess: (savedCount) => {
+      toast.success(`Successfully saved ${savedCount} expenses`);
       onSuccess();
       onOpenChange(false);
       reset();
-    } catch (err) {
+    },
+    onError: (err) => {
       toast.error(
         err instanceof Error
           ? err.message
           : "Network error while saving expenses. Please check your connection.",
       );
-    } finally {
-      setIsSubmitting(false);
-    }
+    },
+  });
+
+  const onSubmit = (data: ExpenseEntryValues) => {
+    saveExpensesMutation.mutate(data);
   };
 
   return (
@@ -258,17 +264,17 @@ export function ExpenseEntryDialog({ isOpen, onOpenChange, onSuccess }: ExpenseE
                     type="button" 
                     variant="ghost" 
                     onClick={() => onOpenChange(false)} 
-                    disabled={isSubmitting}
+                    disabled={saveExpensesMutation.isPending}
                     className="h-9 px-4 text-sm font-medium"
                   >
                     Cancel
                   </Button>
                   <Button 
                     type="submit" 
-                    disabled={isSubmitting}
+                    disabled={saveExpensesMutation.isPending}
                     className="h-9 px-6 font-medium"
                   >
-                    {isSubmitting ? (
+                    {saveExpensesMutation.isPending ? (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     ) : (
                       <Plus className="mr-2 h-4 w-4" />

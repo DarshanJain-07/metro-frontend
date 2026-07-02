@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { 
   Table, 
@@ -27,7 +28,8 @@ import { ExpenseEntryDialog } from "./expense-entry-dialog";
 import { PageHeader } from "@/components/page-header";
 import { Calendar } from "@/components/ui/calendar";
 import { Surface } from "@/components/ui/surface";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useAuth } from "@/lib/auth-context";
+import { expenseKeys } from "@/lib/query-keys";
 
 interface DailySummary {
   date: string;
@@ -57,11 +59,13 @@ const EMPTY_BRANCH_SUMMARIES: BranchSummary[] = [];
 const EMPTY_EXPENSES: ExpenseItem[] = [];
 
 export function ExpensesDashboard() {
+  const { activeMembership } = useAuth();
+  const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
   
   const [isEntryDialogOpen, setIsEntryDialogOpen] = useState(false);
-  const [refreshKey, setRefreshKey] = useState(0);
+  const activeMembershipId = activeMembership?.id;
 
   const formattedDate = useMemo(() => {
     if (!selectedDate) return "";
@@ -74,8 +78,9 @@ export function ExpensesDashboard() {
   const {
     data: loadedDailySummaries,
     error: dailySummariesError,
-  } = useAsyncResource<DailySummary[]>(
-    async ({ signal }) => {
+  } = useQuery<DailySummary[]>({
+    queryKey: expenseKeys.dailySummary(activeMembershipId),
+    queryFn: async ({ signal }) => {
       const res = await fetchWithAuth("/api/v1/accounts/expenses/daily-summary/", {
         signal,
       });
@@ -84,17 +89,17 @@ export function ExpensesDashboard() {
       }
       return res.json();
     },
-    { deps: [refreshKey], initialData: [] },
-  );
+    initialData: [] as DailySummary[],
+  });
   const dailySummaries = loadedDailySummaries ?? EMPTY_DAILY_SUMMARIES;
 
   const {
     data: loadedBranchSummaries,
     error: branchSummariesError,
     isLoading: isLoadingBranches,
-  } = useAsyncResource<BranchSummary[]>(
-    async ({ signal }) => {
-      if (!formattedDate) return [];
+  } = useQuery<BranchSummary[]>({
+    queryKey: expenseKeys.branchSummary(activeMembershipId, formattedDate),
+    queryFn: async ({ signal }) => {
       const res = await fetchWithAuth(
         `/api/v1/accounts/expenses/summary/?date=${formattedDate}`,
         { signal },
@@ -104,8 +109,9 @@ export function ExpensesDashboard() {
       }
       return res.json();
     },
-    { deps: [formattedDate, refreshKey], initialData: [] },
-  );
+    enabled: Boolean(formattedDate),
+    initialData: [] as BranchSummary[],
+  });
   const branchSummaries = loadedBranchSummaries ?? EMPTY_BRANCH_SUMMARIES;
 
   const effectiveSelectedBranchId = useMemo(() => {
@@ -128,9 +134,13 @@ export function ExpensesDashboard() {
     data: loadedExpenses,
     error: expensesError,
     isLoading: isLoadingEntries,
-  } = useAsyncResource<ExpenseItem[]>(
-    async ({ signal }) => {
-      if (!formattedDate || !effectiveSelectedBranchId) return [];
+  } = useQuery<ExpenseItem[]>({
+    queryKey: expenseKeys.list(
+      activeMembershipId,
+      formattedDate,
+      effectiveSelectedBranchId,
+    ),
+    queryFn: async ({ signal }) => {
       const res = await fetchWithAuth(
         `/api/v1/accounts/expenses/?date=${formattedDate}&office=${effectiveSelectedBranchId}&limit=1000`,
         { signal },
@@ -141,8 +151,9 @@ export function ExpensesDashboard() {
       const json = await res.json();
       return json.results || json;
     },
-    { deps: [formattedDate, effectiveSelectedBranchId, refreshKey], initialData: [] },
-  );
+    enabled: Boolean(formattedDate && effectiveSelectedBranchId),
+    initialData: [] as ExpenseItem[],
+  });
   const expenses = loadedExpenses ?? EMPTY_EXPENSES;
 
   useEffect(() => {
@@ -345,7 +356,9 @@ export function ExpensesDashboard() {
       <ExpenseEntryDialog 
         isOpen={isEntryDialogOpen}
         onOpenChange={setIsEntryDialogOpen}
-        onSuccess={() => setRefreshKey(k => k + 1)}
+        onSuccess={() => {
+          void queryClient.invalidateQueries({ queryKey: expenseKeys.all });
+        }}
       />
     </div>
   );

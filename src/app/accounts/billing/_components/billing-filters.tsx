@@ -2,6 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Calendar, CreditCard, Clock, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormLabel } from "@/components/ui/form-elements";
@@ -17,7 +18,8 @@ import { DatePicker } from "@/components/ui/date-picker";
 import { PageHeader } from "@/components/page-header";
 import { getParties } from "../_lib/actions";
 import { Surface } from "@/components/ui/surface";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useAuth } from "@/lib/auth-context";
+import { masterKeys } from "@/lib/query-keys";
 
 type Party = {
   id: string;
@@ -32,19 +34,21 @@ type PartyOption = {
 export function BillingFilters() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { activeMembership } = useAuth();
 
   const customerId = searchParams.get("customer_id") || "";
   const startDate = formatDateForInput(searchParams.get("from_date") || "");
   const endDate = formatDateForInput(searchParams.get("to_date") || "");
 
-  const { data: loadedParties } = useAsyncResource<Party[]>(
-    async ({ signal }) => {
+  const { data: loadedParties } = useQuery<Party[]>({
+    queryKey: masterKeys.parties(activeMembership?.id),
+    queryFn: async ({ signal }) => {
       const result = await getParties({ signal });
       if (result.success) return result.data;
       throw new Error(result.error || "Could not load parties.");
     },
-    { initialData: [] },
-  );
+    initialData: [] as Party[],
+  });
   const parties = loadedParties ?? [];
   const partyOptions: PartyOption[] = parties.map(p => ({ label: p.name, value: p.id }));
   const selectedCustomer = partyOptions.find(opt => opt.value === customerId) || null;

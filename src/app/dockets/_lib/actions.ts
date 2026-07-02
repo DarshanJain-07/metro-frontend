@@ -1,7 +1,5 @@
 import {
-  API_URL,
   fetchWithAuth,
-  getActiveContextHeaders,
   getApiErrorMessage,
   readApiError,
 } from "@/lib/api";
@@ -47,6 +45,7 @@ export interface DocketFilters {
 
 interface GetDocketsOptions {
   apiPath?: string;
+  signal?: AbortSignal;
 }
 
 export type DocketLineItem = DocketFormValues["line_items"][number] & {
@@ -131,7 +130,7 @@ export async function getDockets(
   const path = queryString ? `${apiPath}?${queryString}` : apiPath;
 
   try {
-    const response = await fetchWithAuth(path);
+    const response = await fetchWithAuth(path, { signal: options.signal });
     const result = await response.json().catch(() => ({}));
 
     if (response.status === 401) {
@@ -149,7 +148,10 @@ export async function getDockets(
     }
 
     return { success: true, data: result };
-  } catch {
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
     return {
       success: false,
       error: "Network error while loading dockets. Please check your connection.",
@@ -157,13 +159,16 @@ export async function getDockets(
   }
 }
 
-export async function getDocket(id: string | number): Promise<{
+export async function getDocket(
+  id: string | number,
+  options: RequestInit = {},
+): Promise<{
   success: boolean;
   data?: DocketDetail;
   error?: string;
 }> {
   try {
-    const response = await fetchWithAuth(`/api/v1/shipments/${id}/`);
+    const response = await fetchWithAuth(`/api/v1/shipments/${id}/`, options);
     const result = await response.json().catch(() => ({}));
 
     if (response.status === 401) {
@@ -181,7 +186,10 @@ export async function getDocket(id: string | number): Promise<{
     }
 
     return { success: true, data: result };
-  } catch {
+  } catch (error) {
+    if (options.signal?.aborted) {
+      throw error;
+    }
     return {
       success: false,
       error: "Network error while loading this docket. Please check your connection.",
@@ -189,18 +197,15 @@ export async function getDocket(id: string | number): Promise<{
   }
 }
 
-export async function createDocket(data: DocketFormValues, token: string) {
+export async function createDocket(data: DocketFormValues) {
   const payload = normalizeDocketPayload(data);
 
   try {
-    const headers = getActiveContextHeaders();
-    headers.set("Content-Type", "application/json");
-    headers.set("Authorization", `Bearer ${token}`);
-    headers.set("X-Idempotency-Key", data.idempotency_key);
-
-    const response = await fetch(`${API_URL}/api/v1/shipments/`, {
+    const response = await fetchWithAuth("/api/v1/shipments/", {
       method: "POST",
-      headers,
+      headers: {
+        "X-Idempotency-Key": data.idempotency_key,
+      },
       body: JSON.stringify(payload),
     });
 
@@ -238,18 +243,12 @@ export async function createDocket(data: DocketFormValues, token: string) {
 export async function updateDocket(
   id: string | number,
   data: DocketFormValues,
-  token: string,
 ) {
   const payload = normalizeDocketPayload(data);
 
   try {
-    const headers = getActiveContextHeaders();
-    headers.set("Content-Type", "application/json");
-    headers.set("Authorization", `Bearer ${token}`);
-
-    const response = await fetch(`${API_URL}/api/v1/shipments/${id}/`, {
+    const response = await fetchWithAuth(`/api/v1/shipments/${id}/`, {
       method: "PATCH",
-      headers,
       body: JSON.stringify(payload),
     });
 

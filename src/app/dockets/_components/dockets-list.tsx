@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useEffect, useMemo } from "react";
 import { useSearchParams } from "next/navigation";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import Link from "next/link";
 import { toast } from "sonner";
 import { FileText, Edit, Printer } from "lucide-react";
-import { getDockets, type DocketFilters, type DocketsResponse, type DocketListItem } from "../_lib/actions";
+import { getDockets, type DocketFilters, type DocketListItem } from "../_lib/actions";
 import { Pagination } from "./pagination";
 import { formatDate } from "@/lib/utils";
 import { useAuth } from "@/lib/auth-context";
@@ -13,6 +14,7 @@ import { DataTable, DataTableColumn } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Surface } from "@/components/ui/surface";
+import { docketKeys } from "@/lib/query-keys";
 
 interface DocketsListProps {
   scope?: "outgoing" | "incoming";
@@ -32,39 +34,14 @@ export function DocketsList({
   const canAccessAllBranches = can("*");
   const searchParams = useSearchParams();
   const activeMembershipId = activeMembership?.id;
-  const [data, setData] = useState<DocketsResponse | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const rows = data?.results || [];
-
-  useEffect(() => {
-    if (isAuthLoading) {
-      return;
-    }
-
-    let isCurrentRequest = true;
-
-    const fetchData = async () => {
-      if (!activeMembershipId) {
-        setData(null);
-        setIsLoading(false);
-        setError("Active branch context is required.");
-        return;
-      }
-
-      const requiresBranchScope = !canAccessAllBranches;
-      if (requiresBranchScope && !branchId) {
-        setData(null);
-        setIsLoading(false);
-        setError("Active branch context is required.");
-        return;
-      }
-
-      setIsLoading(true);
-      setError(null);
-
+  const requiresBranchScope = !canAccessAllBranches;
+  const contextError =
+    !isAuthLoading && (!activeMembershipId || (requiresBranchScope && !branchId))
+      ? "Active branch context is required."
+      : null;
+  const filters: DocketFilters = useMemo(() => {
       const status = searchParams.get("status") || defaultStatus || undefined;
-      const filters: DocketFilters = {
+      return {
         page: Number(searchParams.get("page")) || 1,
         page_size: 25,
         scope,
@@ -76,31 +53,38 @@ export function DocketsList({
         status,
         ...fixedFilters,
       };
+    }, [
+      branchId,
+      defaultStatus,
+      fixedFilters,
+      scope,
+      searchParams,
+    ]);
 
-      const result = await getDockets(filters, { apiPath });
-
-      if (!isCurrentRequest) {
-        return;
-      }
-
+  const docketListQuery = useQuery({
+    queryKey: docketKeys.list(activeMembershipId, apiPath, filters),
+    queryFn: async ({ signal }) => {
+      const result = await getDockets(filters, { apiPath, signal });
       if (result.success && result.data) {
-        setData(result.data);
-      } else {
-        setError(result.error || "Could not load dockets.");
-        // Don't toast for 401 as fetchWithAuth handles redirect
-        if (result.error !== "Authentication session expired.") {
-          toast.error(result.error || "Could not load dockets.");
-        }
+        return result.data;
       }
-      setIsLoading(false);
-    };
+      throw new Error(result.error || "Could not load dockets.");
+    },
+    enabled: !isAuthLoading && !contextError,
+    placeholderData: keepPreviousData,
+  });
 
-    fetchData();
+  const data = docketListQuery.data ?? null;
+  const rows = data?.results || [];
+  const queryError =
+    docketListQuery.error instanceof Error ? docketListQuery.error.message : null;
+  const error = contextError || queryError;
+  const isLoading = isAuthLoading || docketListQuery.isLoading;
 
-    return () => {
-      isCurrentRequest = false;
-    };
-  }, [searchParams, branchId, activeMembershipId, canAccessAllBranches, isAuthLoading, scope, apiPath, defaultStatus, fixedFilters]);
+  useEffect(() => {
+    if (!queryError || queryError === "Authentication session expired.") return;
+    toast.error(queryError);
+  }, [queryError]);
 
   const columns: DataTableColumn<DocketListItem>[] = [
     {

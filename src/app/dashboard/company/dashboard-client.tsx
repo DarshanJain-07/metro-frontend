@@ -1,12 +1,14 @@
 "use client";
 
+import { useQuery } from "@tanstack/react-query";
 import { TrendingUp, Users, Package, ArrowUpRight } from "lucide-react";
 import { fetchWithAuth } from "@/lib/api";
 import { ContentSkeleton } from "@/components/app-skeleton";
 import { PageContainer } from "@/components/page-container";
 import { cn } from "@/lib/utils";
 import { Surface } from "@/components/ui/surface";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useAuth } from "@/lib/auth-context";
+import { dashboardKeys } from "@/lib/query-keys";
 
 interface DashboardStats {
   total_dockets: number;
@@ -24,15 +26,17 @@ export function DashboardClient({
   cachedMetrics?: React.ReactNode;
   cachedOverview?: React.ReactNode;
 }) {
-  const { data: stats, isLoading } = useAsyncResource<DashboardStats>(
-    async ({ signal }) => {
+  const { activeMembership } = useAuth();
+  const { data: stats, isLoading } = useQuery<DashboardStats>({
+    queryKey: dashboardKeys.company(activeMembership?.id),
+    queryFn: async ({ signal }) => {
       const res = await fetchWithAuth("/api/v1/dashboard/", { signal });
       if (!res.ok) {
         throw new Error("Could not load dashboard stats.");
       }
       return res.json();
     },
-  );
+  });
 
   if (isLoading) return <ContentSkeleton />;
 

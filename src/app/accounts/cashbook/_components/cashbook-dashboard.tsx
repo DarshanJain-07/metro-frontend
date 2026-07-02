@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useMemo } from "react";
+import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { 
   Table, 
@@ -28,7 +29,8 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { Surface } from "@/components/ui/surface";
 import { format } from "date-fns";
 import type { DateRange } from "react-day-picker";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useAuth } from "@/lib/auth-context";
+import { cashbookKeys } from "@/lib/query-keys";
 
 interface CashbookSummary {
   opening_balance: number;
@@ -51,12 +53,13 @@ interface CashbookData {
 }
 
 export function CashbookDashboard() {
+  const { activeMembership } = useAuth();
+  const queryClient = useQueryClient();
   const [dateRange, setDateRange] = useState<{ from: Date; to: Date }>({
     from: new Date(new Date().getFullYear(), new Date().getMonth(), 1),
     to: new Date()
   });
-  
-  const [refreshKey, setRefreshKey] = useState(0);
+  const activeMembershipId = activeMembership?.id;
 
   const formattedRange = useMemo(() => {
     const fromStr = format(dateRange.from, "yyyy-MM-dd");
@@ -64,8 +67,13 @@ export function CashbookDashboard() {
     return { from: fromStr, to: toStr };
   }, [dateRange]);
 
-  const { data, error, isLoading, refetch } = useAsyncResource<CashbookData>(
-    async ({ signal }) => {
+  const { data, error, isLoading } = useQuery<CashbookData>({
+    queryKey: cashbookKeys.range(
+      activeMembershipId,
+      formattedRange.from,
+      formattedRange.to,
+    ),
+    queryFn: async ({ signal }) => {
       const res = await fetchWithAuth(
         `/api/v1/accounts/cashbook/?start_date=${formattedRange.from}&end_date=${formattedRange.to}`,
         { signal },
@@ -78,8 +86,8 @@ export function CashbookDashboard() {
       }
       return res.json();
     },
-    { deps: [formattedRange.from, formattedRange.to, refreshKey] },
-  );
+    placeholderData: keepPreviousData,
+  });
 
   useEffect(() => {
     if (!(error instanceof Error)) return;
@@ -118,8 +126,13 @@ export function CashbookDashboard() {
               variant="secondary" 
               className="h-9"
               onClick={() => {
-                setRefreshKey(k => k + 1);
-                refetch();
+                void queryClient.invalidateQueries({
+                  queryKey: cashbookKeys.range(
+                    activeMembershipId,
+                    formattedRange.from,
+                    formattedRange.to,
+                  ),
+                });
               }}
             >
               Refresh

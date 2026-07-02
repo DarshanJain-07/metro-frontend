@@ -2,6 +2,12 @@
 
 import { useState, useEffect, useMemo, useRef } from "react";
 import { useSearchParams } from "next/navigation";
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { toast } from "sonner";
 import { FileText, CheckCircle2, XCircle, CreditCard, Loader2 } from "lucide-react";
 import { getBillingDockets, generateBillForDockets, type DocketsResponse, type DocketListItem } from "../_lib/actions";
@@ -12,7 +18,7 @@ import { DataTable, DataTableColumn } from "@/components/data-table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Surface } from "@/components/ui/surface";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { billingKeys, dashboardKeys, docketKeys } from "@/lib/query-keys";
 
 function getSelectionKey(queryKey: string, data: DocketsResponse) {
   return `${queryKey}|${data.results.map((row) => row.id).join(",")}`;
@@ -20,10 +26,11 @@ function getSelectionKey(queryKey: string, data: DocketsResponse) {
 
 export function BillingList() {
   const { activeMembership } = useAuth();
+  const queryClient = useQueryClient();
   const branchId = activeMembership?.branch;
+  const activeMembershipId = activeMembership?.id;
   const searchParams = useSearchParams();
   const searchParamsString = searchParams.toString();
-  const [isGenerating, setIsGenerating] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const checkboxRef = useRef<HTMLInputElement>(null);
   const lastSelectionKeyRef = useRef<string | null>(null);
@@ -46,8 +53,8 @@ export function BillingList() {
     [searchParams, branchId],
   );
   const billingQueryKey = useMemo(
-    () => `${branchId || ""}|${searchParamsString}`,
-    [branchId, searchParamsString],
+    () => `${activeMembershipId || ""}|${branchId || ""}|${searchParamsString}`,
+    [activeMembershipId, branchId, searchParamsString],
   );
 
   const {
@@ -55,17 +62,18 @@ export function BillingList() {
     error,
     isLoading,
     refetch,
-    setData,
-  } = useAsyncResource<DocketsResponse>(
-    async ({ signal }) => {
+  } = useQuery({
+    queryKey: billingKeys.list(activeMembershipId, filters),
+    queryFn: async ({ signal }) => {
       const result = await getBillingDockets(filters, { signal });
       if (result.success && result.data) {
         return result.data;
       }
       throw new Error(result.error || "Could not load billing dockets.");
     },
-    { deps: [billingQueryKey] },
-  );
+    enabled: Boolean(activeMembershipId),
+    placeholderData: keepPreviousData,
+  });
 
   useEffect(() => {
     if (!(error instanceof Error)) return;
@@ -118,33 +126,38 @@ export function BillingList() {
       .reduce((sum, r) => sum + Number(r.total_amount), 0);
   }, [data, selectedIds]);
 
-  const handleGenerateBill = async () => {
+  const generateBillMutation = useMutation({
+    mutationFn: async () => {
+      const result = await generateBillForDockets(
+        Array.from(selectedIds),
+        searchParams.get("customer_id") || undefined,
+      );
+      if (!result.success) {
+        throw new Error(result.error || "Could not generate bill.");
+      }
+    },
+    onSuccess: () => {
+      toast.success(`Bill generated successfully for ${selectedIds.size} dockets.`);
+      suppressAutoSelectForKeyRef.current = billingQueryKey;
+      setSelectedIds(new Set());
+      void queryClient.invalidateQueries({ queryKey: billingKeys.all });
+      void queryClient.invalidateQueries({ queryKey: docketKeys.all });
+      void queryClient.invalidateQueries({
+        queryKey: dashboardKeys.company(activeMembershipId),
+      });
+    },
+    onError: (err) => {
+      toast.error(err instanceof Error ? err.message : "Could not generate bill.");
+    },
+  });
+
+  const handleGenerateBill = () => {
     if (selectedIds.size === 0) {
       toast.error("Please select at least one docket.");
       return;
     }
 
-    setIsGenerating(true);
-    const result = await generateBillForDockets(Array.from(selectedIds), searchParams.get("customer_id") || undefined);
-    if (result.success) {
-      toast.success(`Bill generated successfully for ${selectedIds.size} dockets.`);
-      const refreshResult = await getBillingDockets(filters);
-      if (refreshResult.success && refreshResult.data) {
-        lastSelectionKeyRef.current = getSelectionKey(
-          billingQueryKey,
-          refreshResult.data,
-        );
-        setData(refreshResult.data);
-        setSelectedIds(new Set());
-      } else {
-        suppressAutoSelectForKeyRef.current = billingQueryKey;
-        setSelectedIds(new Set());
-        refetch();
-      }
-    } else {
-      toast.error(result.error || "Could not generate bill.");
-    }
-    setIsGenerating(false);
+    generateBillMutation.mutate();
   };
 
   const columns: DataTableColumn<DocketListItem>[] = [
@@ -252,7 +265,7 @@ export function BillingList() {
             {error.message}
           </p>
         </div>
-        <Button variant="outline" onClick={refetch}>Try Again</Button>
+        <Button variant="outline" onClick={() => void refetch()}>Try Again</Button>
       </Surface>
     );
   }
@@ -279,12 +292,12 @@ export function BillingList() {
 
         <Button 
           onClick={handleGenerateBill} 
-          disabled={selectedIds.size === 0 || isGenerating}
+          disabled={selectedIds.size === 0 || generateBillMutation.isPending}
           variant="primaryStrong"
           size="xl"
           className="gap-2"
         >
-          {isGenerating ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
+          {generateBillMutation.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <CreditCard className="h-4 w-4" />}
           Generate Bill Now
         </Button>
       </Surface>

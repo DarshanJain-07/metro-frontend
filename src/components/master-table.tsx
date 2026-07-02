@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect, useMemo } from "react";
+import { useCallback, useState, useEffect, useMemo } from "react";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Plus, Edit, Loader2, Search, Upload } from "lucide-react";
@@ -23,7 +24,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { PageHeader } from "@/components/page-header";
 import { DataTable, DataTableColumn } from "@/components/data-table";
 import { ImportDialog } from "./import-dialog";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useAuth } from "@/lib/auth-context";
+import { docketKeys, masterKeys } from "@/lib/query-keys";
 
 export interface ColumnDef<T> {
   header: string;
@@ -82,6 +84,8 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
   onRowClick,
 }: MasterTableProps<T>) {
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const { activeMembership } = useAuth();
   const searchParams = useSearchParams();
   const searchParam = "search";
   const searchParamsString = searchParams.toString();
@@ -101,7 +105,6 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
   const [formData, setFormData] = useState<
     Record<string, string | number | boolean | null>
   >({});
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const optionFields = useMemo(
     () =>
       formFields.filter(
@@ -129,13 +132,12 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
   const queryString = extraQuery.toString();
   const apiPath = baseApiPath + (queryString ? `${baseApiPath.includes("?") ? "&" : "?"}${queryString}` : "");
 
-  const {
-    data: loadedData,
-    error: dataError,
-    isLoading,
-    refetch: refetchData,
-  } = useAsyncResource<T[]>(
-    async ({ signal }) => {
+  const listQuery = useQuery({
+    queryKey: masterKeys.list(activeMembership?.id, apiPath, {
+      refreshKey,
+      title,
+    }),
+    queryFn: async ({ signal }) => {
       const res = await fetchWithAuth(apiPath, { signal });
       if (res.status === 401) {
         throw new Error("Authentication session expired.");
@@ -146,14 +148,16 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
       const json = await res.json();
       return json.results || json;
     },
-    { deps: [apiPath, refreshKey], initialData: [] },
-  );
-  const data = loadedData ?? [];
+    placeholderData: keepPreviousData,
+  });
+  const data = listQuery.data ?? [];
 
-  const {
-    data: loadedDynamicOptions,
-  } = useAsyncResource<Record<string, { label: string; value: string | number }[]>>(
-    async ({ signal }) => {
+  const dynamicOptionsQuery = useQuery({
+    queryKey: [
+      ...masterKeys.options(activeMembership?.id, optionsKey),
+      optionFields,
+    ],
+    queryFn: async ({ signal }) => {
       const loadedOptions: Record<string, { label: string; value: string | number }[]> = {};
 
       await Promise.all(
@@ -173,20 +177,23 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
 
       return loadedOptions;
     },
-    {
-      deps: [optionsKey],
-      enabled: optionFields.length > 0,
-      initialData: {},
-    },
-  );
-  const dynamicOptions = loadedDynamicOptions ?? {};
+    enabled: optionFields.length > 0,
+  });
+  const dynamicOptions = dynamicOptionsQuery.data ?? {};
+
+  const invalidateMasterData = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: masterKeys.all });
+    void queryClient.invalidateQueries({
+      queryKey: docketKeys.metadata(activeMembership?.id),
+    });
+  }, [activeMembership?.id, queryClient]);
 
   useEffect(() => {
-    if (!(dataError instanceof Error)) return;
-    if (dataError.message !== "Authentication session expired.") {
-      toast.error(dataError.message);
+    if (!(listQuery.error instanceof Error)) return;
+    if (listQuery.error.message !== "Authentication session expired.") {
+      toast.error(listQuery.error.message);
     }
-  }, [dataError]);
+  }, [listQuery.error]);
 
   const handleSearch = (query: string) => {
     const params = new URLSearchParams(searchParams.toString());
@@ -228,6 +235,83 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
     setIsDialogOpen(true);
   };
 
+  const saveMutation = useMutation({
+    mutationFn: async ({
+      body,
+      isUpdate,
+      url,
+    }: {
+      body: Record<string, string | number | boolean | null>;
+      isUpdate: boolean;
+      url: string;
+    }) => {
+      const res = await fetchWithAuth(url, {
+        method: isUpdate ? "PATCH" : "POST",
+        body: JSON.stringify(body),
+      });
+
+      if (res.status === 401) {
+        throw new Error("Authentication session expired.");
+      }
+
+      if (!res.ok) {
+        throw new Error(await readApiError(res, `Could not save ${title.toLowerCase()}.`));
+      }
+    },
+    onSuccess: () => {
+      toast.success(title + " saved successfully");
+      setIsDialogOpen(false);
+      invalidateMasterData();
+    },
+    onError: (err) => {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : `Could not save ${title.toLowerCase()}.`;
+      if (errorMessage !== "Authentication session expired.") {
+        toast.error(errorMessage);
+      }
+    },
+  });
+
+  const importMutation = useMutation({
+    mutationFn: async (importData: ImportRow[]) => {
+      const res = await fetchWithAuth(`${baseApiPath}import-rows/`, {
+        method: "POST",
+        body: JSON.stringify({ rows: importData }),
+      });
+
+      if (res.status === 401) {
+        throw new Error("Authentication session expired.");
+      }
+
+      if (!res.ok) {
+        throw new Error(await readApiError(res, `Could not import ${title.toLowerCase()}.`));
+      }
+
+      return {
+        created: await res.json().catch(() => []),
+        importData,
+      };
+    },
+    onSuccess: ({ created, importData }) => {
+      const count = Array.isArray(created) ? created.length : importData.length;
+      toast.success(`Successfully imported ${count} items`);
+      invalidateMasterData();
+    },
+    onError: (err) => {
+      const errorMessage =
+        err instanceof Error
+          ? err.message
+          : "Network error while importing. Please check your connection.";
+      if (errorMessage !== "Authentication session expired.") {
+        toast.error(errorMessage, { duration: 5000 });
+      }
+    },
+  });
+
+  const isSubmitting = saveMutation.isPending || importMutation.isPending;
+
 
   const tableColumns: DataTableColumn<T>[] = columns.map((col) => ({
     header: col.header,
@@ -241,67 +325,22 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
 
   const handleSave = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
-    setIsSubmitting(true);
-    try {
-      const isUpdate = !!editingItem;
-      let url = baseApiPath;
-      if (isUpdate) {
-        const separator = baseApiPath.endsWith("/") ? "" : "/";
-        url = baseApiPath + separator + editingItem.id + "/";
-      }
-
-      const res = await fetchWithAuth(url, {
-        method: isUpdate ? "PATCH" : "POST",
-        body: JSON.stringify(formData),
-      });
-
-      if (res.status === 401) return;
-
-      if (!res.ok) {
-        throw new Error(await readApiError(res, `Could not save ${title.toLowerCase()}.`));
-      }
-
-      toast.success(title + " saved successfully");
-      setIsDialogOpen(false);
-      refetchData();
-    } catch (err) {
-      const errorMessage =
-        err instanceof Error
-          ? err.message
-          : `Could not save ${title.toLowerCase()}.`;
-      toast.error(errorMessage);
-    } finally {
-      setIsSubmitting(false);
+    const isUpdate = !!editingItem;
+    let url = baseApiPath;
+    if (isUpdate && editingItem) {
+      const separator = baseApiPath.endsWith("/") ? "" : "/";
+      url = baseApiPath + separator + editingItem.id + "/";
     }
+
+    saveMutation.mutate({
+      body: formData,
+      isUpdate,
+      url,
+    });
   };
 
   const handleImport = async (importData: ImportRow[]) => {
-    try {
-      const res = await fetchWithAuth(`${baseApiPath}import-rows/`, {
-        method: "POST",
-        body: JSON.stringify({ rows: importData }),
-      });
-
-      if (res.status === 401) return;
-
-      if (!res.ok) {
-        toast.error(await readApiError(res, `Could not import ${title.toLowerCase()}.`), {
-          duration: 5000,
-        });
-        return;
-      }
-
-      const created = await res.json().catch(() => []);
-      const count = Array.isArray(created) ? created.length : importData.length;
-      toast.success(`Successfully imported ${count} items`);
-      refetchData();
-    } catch (err) {
-      toast.error(
-        err instanceof Error
-          ? err.message
-          : "Network error while importing. Please check your connection.",
-      );
-    }
+    await importMutation.mutateAsync(importData).catch(() => undefined);
   };
 
   return (
@@ -473,7 +512,7 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
         <DataTable<T>
           data={data}
           columns={tableColumns}
-          isLoading={isLoading}
+          isLoading={listQuery.isLoading}
           onRowClick={onRowClick}
           emptyMessage={`No ${title.toLowerCase()} found.`}
           actions={

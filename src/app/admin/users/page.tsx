@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { MasterTable, ColumnDef } from "@/components/master-table";
 import { PageContainer } from "@/components/page-container";
 import { Button } from "@/components/ui/button";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { adminKeys, authKeys } from "@/lib/query-keys";
 import {
   Sheet,
   SheetContent,
@@ -55,7 +56,8 @@ interface EffectiveRolePermission {
 }
 
 export default function UsersPage() {
-  const { can } = useAuth();
+  const { activeMembership, can } = useAuth();
+  const queryClient = useQueryClient();
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [isTemplatesOpen, setIsTemplatesOpen] = useState(false);
   const [role, setRole] = useState<Role | null>(null);
@@ -72,8 +74,9 @@ export default function UsersPage() {
   const {
     data: adminData,
     error: adminDataError,
-  } = useAsyncResource<{ catalog: Permission[]; roles: RoleDefinition[] }>(
-    async ({ signal }) => {
+  } = useQuery<{ catalog: Permission[]; roles: RoleDefinition[] }>({
+    queryKey: [...adminKeys.all, "bootstrap", activeMembership?.id],
+    queryFn: async ({ signal }) => {
       const [catalogResponse, rolesResponse] = await Promise.all([
         fetchWithAuth("/api/v1/auth/permission-catalog/", { signal }),
         fetchWithAuth("/api/v1/auth/roles/", { signal }),
@@ -92,23 +95,18 @@ export default function UsersPage() {
         roles: rolesPayload.results || rolesPayload,
       };
     },
-    {
-      enabled: canManageRoles,
-      deps: [canManageRoles],
-      initialData: { catalog: [], roles: [] },
-    },
-  );
+    enabled: canManageRoles,
+    initialData: { catalog: [], roles: [] },
+  });
   const catalog = adminData?.catalog ?? [];
   const roles = adminData?.roles ?? [];
 
-  const {
-    data: loadedPermissions,
-    error: permissionsError,
-    isLoading,
-    refetch: refetchRolePermissions,
-  } = useAsyncResource<Record<string, PermissionState>>(
-    async ({ signal }) => {
-      if (!role) return {};
+  const rolePermissionsQuery = useQuery<Record<string, PermissionState>>({
+    queryKey: [
+      ...adminKeys.rolePermissions(activeMembership?.id, role),
+      catalog.map((permission) => permission.code),
+    ],
+    queryFn: async ({ signal }) => {
       const response = await fetchWithAuth(`/api/v1/auth/company-role-permissions/?role=${role}`, {
         signal,
       });
@@ -130,12 +128,13 @@ export default function UsersPage() {
       }
       return nextState;
     },
-    {
-      enabled: canManageRoles && !!role,
-      deps: [canManageRoles, role, catalog],
-      initialData: {},
-    },
-  );
+    enabled: canManageRoles && !!role,
+    initialData: {} as Record<string, PermissionState>,
+  });
+  const loadedPermissions = rolePermissionsQuery.data;
+  const permissionsError = rolePermissionsQuery.error;
+  const isLoading = rolePermissionsQuery.isLoading;
+  const refetchRolePermissions = rolePermissionsQuery.refetch;
 
   const permissions =
     permissionOverrides?.role === role
@@ -183,6 +182,10 @@ export default function UsersPage() {
       }
       return { role, permissions: next };
     });
+    void queryClient.invalidateQueries({
+      queryKey: adminKeys.rolePermissions(activeMembership?.id, role),
+    });
+    void queryClient.invalidateQueries({ queryKey: authKeys.session() });
     toast.success(`${enabled ? 'Enabled' : 'Disabled'} permission.`);
   }
 
@@ -214,6 +217,10 @@ export default function UsersPage() {
 
       if (results.every(r => r.ok)) {
         setPermissionOverrides({ role, permissions: { ...clipboard } });
+        void queryClient.invalidateQueries({
+          queryKey: adminKeys.rolePermissions(activeMembership?.id, role),
+        });
+        void queryClient.invalidateQueries({ queryKey: authKeys.session() });
         toast.success("Permissions pasted successfully.");
       } else {
         setPermissionOverrides(null);

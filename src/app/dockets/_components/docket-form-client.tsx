@@ -3,6 +3,7 @@
 import {
   createContext,
   memo,
+  useCallback,
   useContext,
   useEffect,
   useRef,
@@ -10,6 +11,7 @@ import {
   useMemo,
   type ReactNode,
 } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import {
@@ -28,8 +30,9 @@ import { PartyInfo } from "./party-info";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, Loader2, X } from "lucide-react";
 import { getLocalDateValue, formatDateForInput } from "@/lib/utils";
-import { fetchWithAuth, getAuthToken, readApiError } from "@/lib/api";
+import { fetchWithAuth, readApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { billingKeys, dashboardKeys, docketKeys } from "@/lib/query-keys";
 import {
   FormGroup,
   FormLabel,
@@ -785,10 +788,8 @@ export function DocketFormClient({
   docketId?: string;
 }) {
   const router = useRouter();
-  const [isSubmitting, setIsSubmitting] = useState(false);
+  const queryClient = useQueryClient();
   const [metadata, setMetadata] = useState<DocketMetadata | null>(null);
-  const [isLoadingMetadata, setIsLoadingMetadata] = useState(true);
-  const [isLoadingDocket, setIsLoadingDocket] = useState(!!docketId);
   const [isCancelDialogOpen, setIsCancelDialogOpen] = useState(false);
   const suggestedRateRequestRef = useRef(0);
   const previewCalculationRequestRef = useRef(0);
@@ -836,7 +837,8 @@ export function DocketFormClient({
   });
 
   const { handleSubmit, setValue, reset, control, setError } = methods;
-  const { can } = useAuth();
+  const { activeMembership, can } = useAuth();
+  const activeMembershipId = activeMembership?.id;
 
   const canCreateDockets = can("shipment:create");
   const [availableActions, setAvailableActions] = useState<string[]>([]);
@@ -1057,7 +1059,7 @@ export function DocketFormClient({
   }, [watchedCalculationFields, setValue]);
 
   const handlePartySaved = (party: DocketMetadata["parties"][number]) => {
-    setMetadata((current) => {
+    const mergeParty = (current: DocketMetadata | null) => {
       if (!current) return current;
 
       const parties = current.parties.some((item) => item.id === party.id)
@@ -1068,84 +1070,111 @@ export function DocketFormClient({
         ...current,
         parties: parties.sort((a, b) => a.name.localeCompare(b.name)),
       };
-    });
-  };
-
-  useEffect(() => {
-    const loadMetadata = async () => {
-      try {
-        const response = await fetchWithAuth("/api/v1/shipments/metadata/", {
-          headers: { "X-Use-Primary-DB": "true" },
-        });
-
-        if (response.status === 401) return;
-
-        if (!response.ok) {
-          throw new Error(await readApiError(response, `Metadata request failed (${response.status}).`));
-        }
-
-        const metadataData = await response.json();
-
-        if (metadataData.parties && !Array.isArray(metadataData.parties)) {
-          metadataData.parties = metadataData.parties.results || [];
-        }
-
-        if (!metadataData.parties || metadataData.parties.length === 0) {
-          try {
-            const partiesRes = await fetchWithAuth("/api/v1/master/parties/");
-            if (partiesRes.ok) {
-              const partiesData = await partiesRes.json();
-              metadataData.parties = Array.isArray(partiesData)
-                ? partiesData
-                : partiesData.results || [];
-            }
-          } catch (err) {
-            console.error("Failed to fetch parties from master API", err);
-          }
-        }
-
-        setMetadata(metadataData as DocketMetadata);
-
-        if (docketId) {
-          const docketResult = await getDocket(docketId);
-          if (docketResult.success && docketResult.data) {
-            const docket = docketResult.data as DocketDetail;
-            setAvailableActions(docket.available_actions || []);
-            reset({
-              ...docket,
-              date: formatDateForInput(docket.date),
-              origin_branch: String(docket.origin_office || ""),
-              to_city: String(docket.to_city),
-              destination_branch: String(docket.destination_branch),
-              consignor_city: String(docket.consignor_city),
-              consignee_city: String(docket.consignee_city),
-              additional_charges: Number(docket.additional_charges),
-              delivery_charge: Number(docket.delivery_charge),
-              advance_amount: Number(docket.advance_amount),
-              line_items: docket.line_items.map((item) => ({
-                ...item,
-                pieces: Number(item.pieces),
-                actual_weight: Number(item.actual_weight),
-                charged_weight: Number(item.charged_weight),
-                rate: Number(item.rate),
-                charge: Number(item.charge),
-              })),
-            });
-          } else {
-            toast.error(docketResult.error || "Failed to load docket data");
-          }
-          setIsLoadingDocket(false);
-        }
-      } catch (error) {
-        console.error("Metadata error:", error);
-        toast.error("Could not load data.");
-      } finally {
-        setIsLoadingMetadata(false);
-      }
     };
 
-    loadMetadata();
-  }, [docketId, reset]);
+    setMetadata(mergeParty);
+    queryClient.setQueryData<DocketMetadata | null>(
+      docketKeys.metadata(activeMembershipId),
+      (current) => mergeParty(current ?? null),
+    );
+  };
+
+  const metadataQuery = useQuery({
+    queryKey: docketKeys.metadata(activeMembershipId),
+    queryFn: async ({ signal }) => {
+      const response = await fetchWithAuth("/api/v1/shipments/metadata/", {
+        headers: { "X-Use-Primary-DB": "true" },
+        signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(
+          await readApiError(
+            response,
+            `Metadata request failed (${response.status}).`,
+          ),
+        );
+      }
+
+      const metadataData = await response.json();
+
+      if (metadataData.parties && !Array.isArray(metadataData.parties)) {
+        metadataData.parties = metadataData.parties.results || [];
+      }
+
+      if (!metadataData.parties || metadataData.parties.length === 0) {
+        const partiesRes = await fetchWithAuth("/api/v1/master/parties/", {
+          signal,
+        });
+        if (partiesRes.ok) {
+          const partiesData = await partiesRes.json();
+          metadataData.parties = Array.isArray(partiesData)
+            ? partiesData
+            : partiesData.results || [];
+        }
+      }
+
+      return metadataData as DocketMetadata;
+    },
+  });
+
+  const docketQuery = useQuery({
+    queryKey: docketId
+      ? docketKeys.detail(activeMembershipId, docketId)
+      : [...docketKeys.all, "detail", activeMembershipId || "none", "new"],
+    queryFn: async ({ signal }) => {
+      if (!docketId) return null;
+      const docketResult = await getDocket(docketId, { signal });
+      if (docketResult.success && docketResult.data) {
+        return docketResult.data as DocketDetail;
+      }
+      throw new Error(docketResult.error || "Failed to load docket data");
+    },
+    enabled: Boolean(docketId),
+  });
+
+  useEffect(() => {
+    if (metadataQuery.data) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setMetadata(metadataQuery.data);
+    }
+  }, [metadataQuery.data]);
+
+  useEffect(() => {
+    if (!docketId || !docketQuery.data) return;
+
+    const docket = docketQuery.data;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setAvailableActions(docket.available_actions || []);
+    reset({
+      ...docket,
+      date: formatDateForInput(docket.date),
+      origin_branch: String(docket.origin_office || ""),
+      to_city: String(docket.to_city),
+      destination_branch: String(docket.destination_branch),
+      consignor_city: String(docket.consignor_city),
+      consignee_city: String(docket.consignee_city),
+      additional_charges: Number(docket.additional_charges),
+      delivery_charge: Number(docket.delivery_charge),
+      advance_amount: Number(docket.advance_amount),
+      line_items: docket.line_items.map((item) => ({
+        ...item,
+        pieces: Number(item.pieces),
+        actual_weight: Number(item.actual_weight),
+        charged_weight: Number(item.charged_weight),
+        rate: Number(item.rate),
+        charge: Number(item.charge),
+      })),
+    });
+  }, [docketId, docketQuery.data, reset]);
+
+  useEffect(() => {
+    [metadataQuery.error, docketQuery.error].forEach((error) => {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      }
+    });
+  }, [metadataQuery.error, docketQuery.error]);
 
   useEffect(() => {
     if (docketId) return;
@@ -1155,7 +1184,75 @@ export function DocketFormClient({
     );
   }, [docketId, setValue]);
 
-  const onSubmit = async (data: DocketFormValues) => {
+  const invalidateDocketDomains = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: docketKeys.all });
+    void queryClient.invalidateQueries({ queryKey: billingKeys.all });
+    void queryClient.invalidateQueries({
+      queryKey: dashboardKeys.company(activeMembershipId),
+    });
+  }, [activeMembershipId, queryClient]);
+
+  const saveDocketMutation = useMutation({
+    mutationFn: async (data: DocketFormValues) => {
+      const result = docketId
+        ? await updateDocket(docketId, data)
+        : await createDocket(data);
+
+      if (!result.success) {
+        throw new Error(result.error || "Failed to save");
+      }
+
+      return result.data;
+    },
+    onSuccess: () => {
+      invalidateDocketDomains();
+      toast.success(`Docket ${docketId ? "updated" : "created"} successfully!`);
+      setTimeout(() => {
+        router.push("/dockets");
+        router.refresh();
+      }, 1500);
+    },
+    onError: (error) => {
+      console.error("Docket save error:", error);
+      toast.error(error instanceof Error ? error.message : "Failed to save");
+    },
+  });
+
+  const cancelDocketMutation = useMutation({
+    mutationFn: async () => {
+      if (!docketId) return;
+      const response = await fetchWithAuth(`/api/v1/shipments/${docketId}/cancel/`, {
+        method: "POST",
+      });
+
+      if (!response.ok) {
+        if (response.status === 401) return;
+        throw new Error(await readApiError(response, "Could not cancel docket."));
+      }
+    },
+    onSuccess: () => {
+      setValue("status", "CANCELLED");
+      invalidateDocketDomains();
+      setIsCancelDialogOpen(false);
+      toast.success("Docket cancelled.");
+      router.push("/dockets");
+      router.refresh();
+    },
+    onError: (error) => {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Network error while cancelling docket. Please check your connection.",
+      );
+    },
+  });
+
+  const isSubmitting =
+    saveDocketMutation.isPending || cancelDocketMutation.isPending;
+  const isLoadingMetadata = metadataQuery.isLoading;
+  const isLoadingDocket = Boolean(docketId && docketQuery.isLoading);
+
+  const onSubmit = (data: DocketFormValues) => {
     if (!canEdit) {
       toast.error("You do not have permission to save this docket.");
       return;
@@ -1170,75 +1267,11 @@ export function DocketFormClient({
       return;
     }
 
-    setIsSubmitting(true);
-    let resetSubmitting = true;
-
-    try {
-      const token = await getAuthToken();
-      if (!token) {
-        toast.error("Session expired.");
-        router.push("/");
-        return;
-      }
-
-      const result = docketId
-        ? await updateDocket(docketId, data, token)
-        : await createDocket(data, token);
-
-      if (result.success) {
-        resetSubmitting = false;
-        toast.success(`Docket ${docketId ? "updated" : "created"} successfully!`);
-        setTimeout(() => {
-          router.push("/dockets");
-          router.refresh();
-        }, 1500);
-      } else {
-        toast.error(result.error || "Failed to save");
-      }
-    } catch (error) {
-      console.error("Docket save error:", error);
-      toast.error("Failed to save");
-    } finally {
-      if (resetSubmitting) {
-        setIsSubmitting(false);
-      }
-    }
+    saveDocketMutation.mutate(data);
   };
 
-  const cancelDocket = async () => {
-    setIsSubmitting(true);
-
-    try {
-      const response = await fetchWithAuth(`/api/v1/shipments/${docketId}/cancel/`, {
-        method: "POST",
-      });
-
-      if (response.ok) {
-        setValue("status", "CANCELLED");
-        toast.success("Docket cancelled.");
-        return true;
-      } else {
-        if (response.status === 401) return false;
-        toast.error(await readApiError(response, "Could not cancel docket."));
-        return false;
-      }
-    } catch {
-      toast.error(
-        "Network error while cancelling docket. Please check your connection.",
-      );
-      return false;
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const confirmCancel = async () => {
-    const success = await cancelDocket();
-    if (success) {
-      setIsCancelDialogOpen(false);
-      router.push("/dockets");
-      router.refresh();
-    }
+  const confirmCancel = () => {
+    cancelDocketMutation.mutate();
   };
 
   const handleCancelAction = () => {

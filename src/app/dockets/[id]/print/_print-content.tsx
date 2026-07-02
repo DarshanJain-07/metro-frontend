@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect } from "react";
 import { useParams, useRouter, useSearchParams } from "next/navigation";
+import { useQuery } from "@tanstack/react-query";
 import {
   getDocket,
   type DocketDetail,
@@ -11,6 +12,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "@/lib/auth-context";
 import { fetchWithAuth, readApiError } from "@/lib/api";
+import { docketKeys } from "@/lib/query-keys";
 
 type DocketPrintValue = string | number | null | undefined;
 
@@ -67,43 +69,48 @@ export default function PrintDocketContent() {
   const { id } = useParams() as { id: string };
   const searchParams = useSearchParams();
   const version = searchParams.get("v") || "v1";
-  const [docket, setDocket] = useState<DocketDetail | null>(null);
-  const [metadata, setMetadata] = useState<PrintMetadata | null>(null);
-  const [loading, setLoading] = useState(true);
   const { activeMembership } = useAuth();
 
   const router = useRouter();
 
-  useEffect(() => {
-    const fetchData = async () => {
-      try {
-        const [docketResult, metadataResponse] = await Promise.all([
-          getDocket(id),
-          fetchWithAuth("/api/v1/shipments/metadata/")
-        ]);
-
-        if (docketResult.success && docketResult.data) {
-          setDocket(docketResult.data);
-        } else {
-          toast.error(docketResult.error || "Could not load this docket.");
-        }
-
-        if (metadataResponse.ok) {
-          setMetadata(await metadataResponse.json());
-        } else if (metadataResponse.status !== 401) {
-          toast.error(
-            await readApiError(metadataResponse, "Could not load print metadata."),
-          );
-        }
-      } catch (err) {
-        console.error("Print page fetch error:", err);
-      } finally {
-        setLoading(false);
+  const docketQuery = useQuery({
+    queryKey: docketKeys.detail(activeMembership?.id, id),
+    queryFn: async ({ signal }) => {
+      const docketResult = await getDocket(id, { signal });
+      if (docketResult.success && docketResult.data) {
+        return docketResult.data;
       }
-    };
+      throw new Error(docketResult.error || "Could not load this docket.");
+    },
+  });
 
-    fetchData();
-  }, [id]);
+  const metadataQuery = useQuery({
+    queryKey: docketKeys.printMetadata(activeMembership?.id),
+    queryFn: async ({ signal }) => {
+      const metadataResponse = await fetchWithAuth(
+        "/api/v1/shipments/metadata/",
+        { signal },
+      );
+      if (!metadataResponse.ok) {
+        throw new Error(
+          await readApiError(metadataResponse, "Could not load print metadata."),
+        );
+      }
+      return (await metadataResponse.json()) as PrintMetadata;
+    },
+  });
+
+  const docket = docketQuery.data || null;
+  const metadata = metadataQuery.data || null;
+  const loading = docketQuery.isLoading || metadataQuery.isLoading;
+
+  useEffect(() => {
+    [docketQuery.error, metadataQuery.error].forEach((error) => {
+      if (error instanceof Error) {
+        toast.error(error.message);
+      }
+    });
+  }, [docketQuery.error, metadataQuery.error]);
 
   const resolveCity = (cityId: DocketPrintValue, cityName: DocketPrintValue): string | null | undefined => {
     if (cityName) return String(cityName);

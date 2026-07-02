@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { CompactSelect } from "@/components/ui/form-elements";
@@ -9,7 +10,8 @@ import { toast } from "sonner";
 import { fetchWithAuth } from "@/lib/api";
 import { Trash2, CheckCircle2, Loader2 } from "lucide-react";
 import { CompactInput } from "@/components/ui/form-elements";
-import { useAsyncResource } from "@/hooks/use-async-resource";
+import { useAuth } from "@/lib/auth-context";
+import { adminKeys, authKeys } from "@/lib/query-keys";
 
 interface Preset {
   id: string;
@@ -30,6 +32,8 @@ interface RoleDefinition {
 const METRO_ROLE = "METRO";
 
 export function RoleTemplatesManager({ catalog, canManage }: RoleTemplatesManagerProps) {
+  const { activeMembership } = useAuth();
+  const queryClient = useQueryClient();
   const [selectedRole, setSelectedRole] = useState<string>("");
   const [rolePermissionOverrides, setRolePermissionOverrides] = useState<{
     role: string;
@@ -54,8 +58,9 @@ export function RoleTemplatesManager({ catalog, canManage }: RoleTemplatesManage
   const {
     data: loadedRoles,
     error: rolesError,
-  } = useAsyncResource<RoleDefinition[]>(
-    async ({ signal }) => {
+  } = useQuery({
+    queryKey: adminKeys.roles(activeMembership?.id),
+    queryFn: async ({ signal }) => {
       const response = await fetchWithAuth("/api/v1/auth/roles/", { signal });
       if (!response.ok) {
         throw new Error("Could not load roles.");
@@ -63,8 +68,9 @@ export function RoleTemplatesManager({ catalog, canManage }: RoleTemplatesManage
       const payload = await response.json();
       return (payload.results || payload) as RoleDefinition[];
     },
-    { enabled: canManage, deps: [canManage], initialData: [] },
-  );
+    enabled: canManage,
+    initialData: [] as RoleDefinition[],
+  });
   const roles = loadedRoles ?? [];
   const effectiveSelectedRole = selectedRole || roles[0]?.code || "";
 
@@ -77,9 +83,12 @@ export function RoleTemplatesManager({ catalog, canManage }: RoleTemplatesManage
     data: loadedRolePermissions,
     error: rolePermissionsError,
     isLoading,
-  } = useAsyncResource<Record<string, PermissionState>>(
-    async ({ signal }) => {
-      if (!effectiveSelectedRole) return {};
+  } = useQuery({
+    queryKey: [
+      ...adminKeys.rolePermissions(activeMembership?.id, effectiveSelectedRole),
+      catalog.map((permission) => permission.code),
+    ],
+    queryFn: async ({ signal }) => {
       const response = await fetchWithAuth(
         `/api/v1/auth/company-role-permissions/?role=${effectiveSelectedRole}`,
         { signal },
@@ -101,12 +110,9 @@ export function RoleTemplatesManager({ catalog, canManage }: RoleTemplatesManage
       }
       throw new Error("Could not load role permissions.");
     },
-    {
-      enabled: canManage && !!effectiveSelectedRole,
-      deps: [canManage, effectiveSelectedRole, catalog],
-      initialData: {},
-    },
-  );
+    enabled: canManage && !!effectiveSelectedRole,
+    initialData: {} as Record<string, PermissionState>,
+  });
   const rolePermissions =
     rolePermissionOverrides?.role === effectiveSelectedRole
       ? rolePermissionOverrides.permissions
@@ -211,6 +217,13 @@ const applyPreset = (preset: Preset) => {
       );
 
       if (results.every(r => r.ok)) {
+        void queryClient.invalidateQueries({
+          queryKey: adminKeys.rolePermissions(
+            activeMembership?.id,
+            effectiveSelectedRole,
+          ),
+        });
+        void queryClient.invalidateQueries({ queryKey: authKeys.session() });
         toast.success(`Template applied to all ${effectiveSelectedRole} users.`, { id: "apply-role" });
       } else {
         toast.error("Some permissions failed to apply.", { id: "apply-role" });

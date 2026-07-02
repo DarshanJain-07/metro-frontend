@@ -1,4 +1,4 @@
-const envApiUrl = process.env.NEXT_PUBLIC_API_URL;
+const envApiUrl = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL;
 
 if (!envApiUrl) {
   throw new Error("NEXT_PUBLIC_API_URL is not defined");
@@ -7,23 +7,6 @@ if (!envApiUrl) {
 const API_URL: string = envApiUrl;
 
 export { API_URL };
-
-export const ACTIVE_MEMBERSHIP_ID_STORAGE_KEY = "active_membership_id";
-export const ACTIVE_CONTEXT_STORAGE_KEY = "metro:active-context";
-
-type AuthTokenGetter = () => Promise<string | null>;
-type AuthTokenRefresher = () => Promise<string | null>;
-
-let authTokenGetter: AuthTokenGetter | null = null;
-let authTokenRefresher: AuthTokenRefresher | null = null;
-
-export function setAuthTokenGetter(getter: AuthTokenGetter | null) {
-  authTokenGetter = getter;
-}
-
-export function setAuthTokenRefresher(refresher: AuthTokenRefresher | null) {
-  authTokenRefresher = refresher;
-}
 
 type ApiErrorPayload = {
   [key: string]: ApiErrorValue | undefined;
@@ -36,6 +19,18 @@ type ApiErrorValue =
   | null
   | ApiErrorPayload
   | ApiErrorValue[];
+
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue | undefined };
+
+const NON_RETRYABLE_STATUSES = new Set([
+  400, 401, 403, 404, 409, 422,
+]);
 
 const STATUS_ERROR_MESSAGES: Record<number, string> = {
   400: "The request was invalid. Please check the entered details.",
@@ -51,7 +46,30 @@ const STATUS_ERROR_MESSAGES: Record<number, string> = {
   504: "The request timed out. Please try again.",
 };
 
-export function getStatusErrorMessage(status: number, fallback = "Request failed.") {
+export class ApiError extends Error {
+  status: number;
+  payload: unknown;
+
+  constructor({
+    message,
+    payload,
+    status,
+  }: {
+    message: string;
+    payload?: unknown;
+    status: number;
+  }) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+    this.payload = payload;
+  }
+}
+
+export function getStatusErrorMessage(
+  status: number,
+  fallback = "Request failed.",
+) {
   return STATUS_ERROR_MESSAGES[status] || fallback;
 }
 
@@ -112,7 +130,10 @@ export function getApiErrorMessage(
   return formatApiErrorPayload(payload, fallback);
 }
 
-export async function readApiError(response: Response, fallback = "Request failed.") {
+export async function readApiError(
+  response: Response,
+  fallback = "Request failed.",
+) {
   const statusFallback = getStatusErrorMessage(response.status, fallback);
   const payload = await response.json().catch(() => null);
   return getApiErrorMessage(payload, {
@@ -121,160 +142,102 @@ export async function readApiError(response: Response, fallback = "Request faile
   });
 }
 
-type ActiveContextSnapshot = {
-  membershipId: string;
-  company: string;
-  branch: string | null;
-};
-
-export type ActiveContextMembership = {
-  id: string;
-  company: number | string;
-  branch?: number | string | null;
-};
-
-function readStoredActiveContext(): ActiveContextSnapshot | null {
-  if (typeof window === "undefined") {
-    return null;
+export function shouldRetryQuery(failureCount: number, error: unknown) {
+  if (failureCount >= 2) return false;
+  if (error instanceof ApiError) {
+    if (NON_RETRYABLE_STATUSES.has(error.status)) return false;
+    return error.status >= 500 || error.status === 429;
   }
+  return true;
+}
 
-  const storedContext = localStorage.getItem(ACTIVE_CONTEXT_STORAGE_KEY);
-  if (!storedContext) {
-    return null;
-  }
+function isAbsoluteUrl(path: string) {
+  return /^https?:\/\//i.test(path);
+}
 
-  try {
-    const parsed = JSON.parse(storedContext) as Partial<ActiveContextSnapshot>;
-    if (!parsed.membershipId || !parsed.company) {
-      return null;
+export function resolveBackendProxyPath(path: string) {
+  if (path.startsWith("/api/backend/")) return path;
+
+  if (isAbsoluteUrl(path)) {
+    const backendUrl = new URL(API_URL);
+    const url = new URL(path);
+
+    if (url.origin !== backendUrl.origin) {
+      throw new Error("Only configured backend URLs can be proxied.");
     }
 
-    return {
-      membershipId: String(parsed.membershipId),
-      company: String(parsed.company),
-      branch:
-        parsed.branch === null || parsed.branch === undefined
-          ? null
-          : String(parsed.branch),
-    };
-  } catch {
-    localStorage.removeItem(ACTIVE_CONTEXT_STORAGE_KEY);
-    return null;
-  }
-}
-
-export function setStoredActiveContext(membership: ActiveContextMembership) {
-  if (typeof window === "undefined") {
-    return;
+    return `/api/backend${url.pathname}${url.search}`;
   }
 
-  const context: ActiveContextSnapshot = {
-    membershipId: membership.id,
-    company: String(membership.company),
-    branch: membership.branch == null ? null : String(membership.branch),
-  };
-
-  localStorage.setItem(ACTIVE_MEMBERSHIP_ID_STORAGE_KEY, membership.id);
-  localStorage.setItem(ACTIVE_CONTEXT_STORAGE_KEY, JSON.stringify(context));
-}
-
-export function clearStoredActiveContext() {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  localStorage.removeItem(ACTIVE_MEMBERSHIP_ID_STORAGE_KEY);
-  localStorage.removeItem(ACTIVE_CONTEXT_STORAGE_KEY);
-}
-
-export function getActiveContextHeaders() {
-  const headers = new Headers();
-
-  if (typeof window === "undefined") {
-    return headers;
-  }
-
-  const context = readStoredActiveContext();
-  if (!context) return headers;
-
-  headers.set("X-Company-ID", context.company);
-  if (context.branch) {
-    headers.set("X-Office-ID", context.branch);
-  }
-
-  return headers;
-}
-
-export async function getAuthToken() {
-  if (typeof window === "undefined") {
-    return null;
-  }
-
-  const token = authTokenGetter ? await authTokenGetter().catch(() => null) : null;
-  if (token || !authTokenRefresher) {
-    return token;
-  }
-
-  return authTokenRefresher().catch(() => null);
-}
-
-function resolveApiUrl(path: string) {
-  const apiUrl = new URL(API_URL);
-  const url = new URL(path, apiUrl);
-
-  if (url.origin !== apiUrl.origin) {
-    throw new Error("fetchWithAuth only supports requests to the configured API origin.");
-  }
-
-  return url.toString();
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  return `/api/backend${normalizedPath}`;
 }
 
 export async function fetchWithAuth(path: string, options: RequestInit = {}) {
-  const url = resolveApiUrl(path);
-  const token = await getAuthToken();
   const headers = new Headers(options.headers);
-
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
-  }
-
-  getActiveContextHeaders().forEach((value, key) => {
-    if (!headers.has(key)) {
-      headers.set(key, value);
-    }
-  });
 
   if (
     !headers.has("Content-Type") &&
     options.method &&
-    !["GET", "DELETE"].includes(options.method)
+    !["GET", "HEAD", "DELETE"].includes(options.method.toUpperCase()) &&
+    options.body
   ) {
     headers.set("Content-Type", "application/json");
   }
 
-  let response = await fetch(url, {
+  const response = await fetch(resolveBackendProxyPath(path), {
     ...options,
+    credentials: "same-origin",
     headers,
   });
 
-  if (response.status === 401 && token && authTokenRefresher) {
-    const refreshedToken = await authTokenRefresher().catch(() => null);
-    if (refreshedToken) {
-      headers.set("Authorization", `Bearer ${refreshedToken}`);
-      response = await fetch(url, {
-        ...options,
-        headers,
-      });
-    }
-  }
-
-  if (response.status === 401) {
-    if (typeof window !== "undefined") {
-      localStorage.removeItem("user");
-      clearStoredActiveContext();
-      window.dispatchEvent(new Event("metro:auth-expired"));
-    }
+  if (response.status === 401 && typeof window !== "undefined") {
+    window.dispatchEvent(new Event("metro:auth-expired"));
   }
 
   return response;
+}
+
+export async function apiFetchJson<T>(
+  path: string,
+  options: RequestInit & { fallback?: string } = {},
+) {
+  const { fallback, ...requestOptions } = options;
+  const response = await fetchWithAuth(path, requestOptions);
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new ApiError({
+      status: response.status,
+      payload,
+      message: getApiErrorMessage(payload, {
+        status: response.status,
+        fallback,
+      }),
+    });
+  }
+
+  return payload as T;
+}
+
+export async function serverApiFetchJson<T>(
+  path: string,
+  options: RequestInit & { fallback?: string } = {},
+) {
+  const { fallback, ...requestOptions } = options;
+  const response = await fetchWithAuth(path, requestOptions);
+  const payload = await response.json().catch(() => null);
+
+  if (!response.ok) {
+    throw new ApiError({
+      status: response.status,
+      payload,
+      message: getApiErrorMessage(payload, {
+        status: response.status,
+        fallback,
+      }),
+    });
+  }
+
+  return payload as T;
 }

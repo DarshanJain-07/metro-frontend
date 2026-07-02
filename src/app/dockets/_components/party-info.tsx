@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { useFormContext } from "react-hook-form";
+import { useQuery } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
-import { API_URL, getActiveContextHeaders, getAuthToken, readApiError } from "@/lib/api";
+import { fetchWithAuth, readApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import {
   FormLabel,
@@ -66,7 +67,6 @@ import { useAuth } from "@/lib/auth-context";
 import { cn } from "@/lib/utils";
 import { SectionTitle } from "@/components/ui/surface";
 
-import { memo } from "react";
 export const PartyInfo = memo(function PartyInfo({
   metadata,
   onPartySaved,
@@ -141,66 +141,73 @@ export const PartyInfo = memo(function PartyInfo({
   }, []);
 
   const handleUnauthorized = useCallback(() => {
-    localStorage.removeItem("user");
     toast.error("Authentication session expired.");
     router.push("/");
   }, [router]);
 
+  const partySearchQuery = useMemo(
+    () =>
+      [consignorInputValue, consigneeInputValue]
+        .map((value) => value.trim())
+        .filter((value) => value.length >= 2)
+        .sort((a, b) => b.length - a.length)[0] || "",
+    [consigneeInputValue, consignorInputValue],
+  );
+  const [debouncedPartySearchQuery, setDebouncedPartySearchQuery] =
+    useState("");
+
   useEffect(() => {
-    const query = [consignorInputValue, consigneeInputValue]
-      .map((value) => value.trim())
-      .filter((value) => value.length >= 2)
-      .sort((a, b) => b.length - a.length)[0];
-
-    if (!query) return;
-
-    const controller = new AbortController();
-    const timeoutId = window.setTimeout(async () => {
-      const token = await getAuthToken();
-      if (!token) return;
-
-      try {
-        const headers = getActiveContextHeaders();
-        headers.set("Authorization", `Bearer ${token}`);
-        headers.set("X-Use-Primary-DB", "true");
-
-        const response = await fetch(
-          `${API_URL}/api/v1/master/parties/?search=${encodeURIComponent(query)}`,
-          {
-            headers,
-            signal: controller.signal,
-          },
-        );
-
-        if (response.status === 401) {
-          handleUnauthorized();
-          return;
-        }
-
-        if (!response.ok) return;
-
-        mergeParties(
-          listFromResponse(
-            (await response.json()) as Party[] | PaginatedResponse<Party>,
-          ),
-        );
-      } catch (error) {
-        if (!controller.signal.aborted) {
-          console.warn("Party search failed:", error);
-        }
-      }
+    const timeoutId = window.setTimeout(() => {
+      setDebouncedPartySearchQuery(partySearchQuery);
     }, 250);
 
     return () => {
       window.clearTimeout(timeoutId);
-      controller.abort();
     };
-  }, [
-    consignorInputValue,
-    consigneeInputValue,
-    handleUnauthorized,
-    mergeParties,
-  ]);
+  }, [partySearchQuery]);
+
+  const partySearch = useQuery({
+    queryKey: [
+      "masters",
+      "parties",
+      "search",
+      debouncedPartySearchQuery,
+    ],
+    queryFn: async ({ signal }) => {
+      const response = await fetchWithAuth(
+        `/api/v1/master/parties/?search=${encodeURIComponent(
+          debouncedPartySearchQuery,
+        )}`,
+        {
+          headers: {
+            "X-Use-Primary-DB": "true",
+          },
+          signal,
+        },
+      );
+
+      if (!response.ok) {
+        throw new Error(await readApiError(response, "Party search failed."));
+      }
+
+      return listFromResponse(
+        (await response.json()) as Party[] | PaginatedResponse<Party>,
+      );
+    },
+    enabled: debouncedPartySearchQuery.length >= 2,
+  });
+
+  useEffect(() => {
+    if (partySearch.data) {
+      mergeParties(partySearch.data);
+    }
+  }, [mergeParties, partySearch.data]);
+
+  useEffect(() => {
+    if (partySearch.error instanceof Error) {
+      console.warn("Party search failed:", partySearch.error);
+    }
+  }, [partySearch.error]);
   const getSelectedPartyOption = (
     name: string,
     selectedPartyId: string | null,
@@ -345,27 +352,18 @@ export const PartyInfo = memo(function PartyInfo({
   const saveParty = async () => {
     if (!partyDialog) return;
 
-    const token = await getAuthToken();
-    if (!token) {
-      handleUnauthorized();
-      return;
-    }
-
     setIsSavingParty(true);
     const isUpdate = partyDialog.partyId !== null;
     const url = isUpdate
-      ? `${API_URL}/api/v1/master/parties/${partyDialog.partyId}/`
-      : `${API_URL}/api/v1/master/parties/`;
+      ? `/api/v1/master/parties/${partyDialog.partyId}/`
+      : "/api/v1/master/parties/";
 
     try {
-      const headers = getActiveContextHeaders();
-      headers.set("Authorization", `Bearer ${token}`);
-      headers.set("Content-Type", "application/json");
-      headers.set("X-Use-Primary-DB", "true");
-
-      const response = await fetch(url, {
+      const response = await fetchWithAuth(url, {
         method: isUpdate ? "PATCH" : "POST",
-        headers,
+        headers: {
+          "X-Use-Primary-DB": "true",
+        },
         body: JSON.stringify({
           name: partyDialog.values.name.trim(),
           city: partyDialog.values.city,

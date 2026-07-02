@@ -8,91 +8,42 @@ import React, {
   useMemo,
   useRef,
   useState,
-  ReactNode,
+  type ReactNode,
 } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ACTIVE_MEMBERSHIP_ID_STORAGE_KEY,
-  API_URL,
-  clearStoredActiveContext,
-  fetchWithAuth,
-  getActiveContextHeaders,
-  readApiError,
-  setAuthTokenGetter,
-  setAuthTokenRefresher,
-  setStoredActiveContext,
-} from "@/lib/api";
+  useMutation,
+  useQuery,
+  useQueryClient,
+  type Query,
+} from "@tanstack/react-query";
+import { ApiError, getApiErrorMessage, readApiError } from "@/lib/api";
 import {
   buildAuthUrl,
   buildCurrentPathRedirect,
   LAST_AUTH_REDIRECT_STORAGE_KEY,
 } from "@/lib/auth-redirect";
+import { authKeys } from "@/lib/query-keys";
+import type {
+  AuthPendingState,
+  AuthResult,
+  Membership,
+  Permission,
+  User,
+  AuthSession,
+} from "@/lib/auth-types";
 
-export type Role = string;
-
-export type Permission = string;
-
-export interface ScopedPermission {
-  code: Permission;
-  scope: "own" | "branch" | "region" | "company" | "all";
-}
-
-export interface Membership {
-  id: string;
-  company: number;
-  company_name: string;
-  branch: string | null;
-  branch_name: string | null;
-  role: Role;
-  permissions?: Permission[];
-  scoped_permissions?: ScopedPermission[];
-}
-
-export interface User {
-  id: number;
-  username: string;
-  email: string;
-  first_name: string;
-  last_name: string;
-  company_name: string | null;
-  branch_name: string | null;
-  is_superuser: boolean;
-  is_owner: boolean;
-  memberships: Membership[];
-  permissions?: Permission[];
-  scoped_permissions?: ScopedPermission[];
-}
-
-export interface AuthFactor {
-  id: string;
-  type?: string;
-  totp?: {
-    issuer?: string;
-    user?: string;
-  };
-}
-
-export interface AuthOrganizationOption {
-  id: string;
-  name: string;
-}
-
-export interface AuthPendingState {
-  status: "pending";
-  type?: string;
-  detail?: string;
-  pending_authentication_token?: string;
-  authentication_factors?: AuthFactor[];
-  organizations?: AuthOrganizationOption[];
-  email?: string;
-}
-
-export interface AuthResult {
-  user: User | null;
-  error: string | null;
-  pending?: AuthPendingState | null;
-  redirectUrl?: string | null;
-}
+export type {
+  AuthFactor,
+  AuthOrganizationOption,
+  AuthPendingState,
+  AuthResult,
+  Membership,
+  Permission,
+  Role,
+  ScopedPermission,
+  User,
+} from "@/lib/auth-types";
 
 interface AuthContextType {
   user: User | null;
@@ -137,6 +88,11 @@ interface AuthContextType {
   setActiveMembership: (membership: Membership) => void;
 }
 
+const EMPTY_SESSION: AuthSession = {
+  user: null,
+  active_membership: null,
+};
+
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const SessionContext = createContext<
   | Pick<
@@ -176,152 +132,130 @@ const PermissionsContext = createContext<
   Pick<AuthContextType, "can"> | undefined
 >(undefined);
 
-const BACKEND_UNREACHABLE_MESSAGE = `Could not reach the backend at ${API_URL}. Make sure the API server is running and CORS allows this frontend.`;
-const ACCESS_TOKEN_STORAGE_KEY = "metro:access-token";
-const REFRESH_TOKEN_STORAGE_KEY = "metro:refresh-token";
-
-async function readAuthError(response: Response) {
-  const fallback =
-    response.status === 401 || response.status === 403
-      ? "Your session was not accepted by the app backend."
-      : "Could not load your app account. Please check your user membership.";
-
-  const payload = await response.json().catch(() => null);
-  if (payload && typeof payload === "object" && "detail" in payload) {
-    const detail = (payload as { detail?: unknown }).detail;
-    if (typeof detail === "string") {
-      return detail;
-    }
-  }
-
-  return fallback;
-}
-
 function isPendingAuthPayload(payload: unknown): payload is AuthPendingState {
   if (!payload || typeof payload !== "object") return false;
   return (payload as { status?: unknown }).status === "pending";
 }
 
-function isAuthRejection(response: Response) {
-  return response.status === 401 || response.status === 403;
+function authQueryPredicate(query: Query) {
+  return query.queryKey[0] === authKeys.all[0];
 }
 
-function getStoredAccessToken() {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(ACCESS_TOKEN_STORAGE_KEY);
+function getFallbackActiveMembership(session: AuthSession | undefined) {
+  return (
+    session?.active_membership ||
+    session?.user?.memberships?.[0] ||
+    null
+  );
 }
 
-function getStoredRefreshToken() {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(REFRESH_TOKEN_STORAGE_KEY);
-}
-
-function migrateStoredUserContext() {
-  if (typeof window === "undefined") return;
-
-  const storedUser = localStorage.getItem("user");
-  if (!storedUser) return;
-
-  try {
-    const parsedUser = JSON.parse(storedUser) as User;
-    const storedId = localStorage.getItem(ACTIVE_MEMBERSHIP_ID_STORAGE_KEY);
-    const membership =
-      parsedUser.memberships.find((item) => item.id === storedId) ||
-      parsedUser.memberships[0];
-
-    if (membership) {
-      setStoredActiveContext(membership);
-    }
-  } catch {
-    // Ignore malformed legacy snapshots. The next /me refresh is authoritative.
-  } finally {
-    localStorage.removeItem("user");
-  }
-}
-
-async function refreshStoredAccessToken() {
-  const refresh = getStoredRefreshToken();
-  if (!refresh) return null;
-
-  const response = await fetch(`${API_URL}/api/v1/auth/token/refresh/`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ refresh }),
+async function fetchAuthSession({ signal }: { signal?: AbortSignal }) {
+  const response = await fetch("/api/auth/me", {
+    credentials: "same-origin",
+    signal,
   });
+  const payload = await response.json().catch(() => null);
+
+  if (response.status === 401) {
+    return EMPTY_SESSION;
+  }
 
   if (!response.ok) {
-    return null;
+    throw new ApiError({
+      status: response.status,
+      payload,
+      message: getApiErrorMessage(payload, {
+        status: response.status,
+        fallback: "Could not load your app account.",
+      }),
+    });
   }
 
-  const payload = (await response.json()) as {
-    access: string;
-    refresh?: string;
-  };
-  localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, payload.access);
-  if (payload.refresh) {
-    localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, payload.refresh);
+  return (payload || EMPTY_SESSION) as AuthSession;
+}
+
+async function postJson(
+  path: string,
+  body?: Record<string, unknown>,
+  options: { fallback?: string } = {},
+) {
+  const response = await fetch(path, {
+    body: body ? JSON.stringify(body) : undefined,
+    credentials: "same-origin",
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    method: "POST",
+  });
+
+  if (!response.ok && response.status !== 202) {
+    const payload = await response.json().catch(() => null);
+    throw new ApiError({
+      status: response.status,
+      payload,
+      message: getApiErrorMessage(payload, {
+        status: response.status,
+        fallback: options.fallback,
+      }),
+    });
   }
-  return payload.access;
+
+  return response;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [isInitializing, setIsInitializing] = useState(true);
-  const [isAuthActionLoading, setIsAuthActionLoading] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-  const authErrorRef = useRef<string | null>(null);
-  const [activeMembership, setActiveMembershipState] =
-    useState<Membership | null>(null);
   const router = useRouter();
+  const queryClient = useQueryClient();
+  const [isAuthActionLoading, setIsAuthActionLoading] = useState(false);
+  const [localAuthError, setLocalAuthError] = useState<string | null>(null);
+  const authErrorRef = useRef<string | null>(null);
   const isSigningOutRef = useRef(false);
+
+  const sessionQuery = useQuery({
+    queryKey: authKeys.session(),
+    queryFn: fetchAuthSession,
+  });
+
+  const session = sessionQuery.data || EMPTY_SESSION;
+  const user = session.user;
+  const activeMembership = getFallbackActiveMembership(session);
+  const queryAuthError =
+    sessionQuery.error instanceof Error ? sessionQuery.error.message : null;
+  const authError = localAuthError || queryAuthError;
+  const isInitializing = sessionQuery.isPending;
   const isLoading = isInitializing || isAuthActionLoading;
 
-  useEffect(() => {
-    setAuthTokenGetter(async () => getStoredAccessToken());
-    setAuthTokenRefresher(refreshStoredAccessToken);
-
-    return () => {
-      setAuthTokenGetter(null);
-      setAuthTokenRefresher(null);
-    };
+  const setAuthError = useCallback((message: string | null) => {
+    setLocalAuthError(message);
+    authErrorRef.current = message;
   }, []);
 
-  const applyUser = useCallback((nextUser: User) => {
-    const storedId = localStorage.getItem(ACTIVE_MEMBERSHIP_ID_STORAGE_KEY);
-    isSigningOutRef.current = false;
-    setUser(nextUser);
-    setAuthError(null);
-    authErrorRef.current = null;
+  const clearScopedQueries = useCallback(() => {
+    queryClient.removeQueries({
+      predicate: (query) => !authQueryPredicate(query),
+    });
+  }, [queryClient]);
 
-    if (nextUser.memberships.length > 0) {
-      const defaultMembership =
-        nextUser.memberships.find((membership) => membership.id === storedId) ||
-        nextUser.memberships[0];
-      setActiveMembershipState(defaultMembership);
-      setStoredActiveContext(defaultMembership);
-    } else {
-      setActiveMembershipState(null);
-      clearStoredActiveContext();
-    }
-  }, []);
+  const setSession = useCallback(
+    (nextSession: AuthSession) => {
+      isSigningOutRef.current = false;
+      setAuthError(null);
+      queryClient.setQueryData(authKeys.session(), nextSession);
+    },
+    [queryClient, setAuthError],
+  );
 
   const clearAuthState = useCallback(() => {
-    localStorage.removeItem("user");
-    clearStoredActiveContext();
-    localStorage.removeItem("last_activity");
-    localStorage.removeItem(LAST_AUTH_REDIRECT_STORAGE_KEY);
-    localStorage.removeItem(ACCESS_TOKEN_STORAGE_KEY);
-    localStorage.removeItem(REFRESH_TOKEN_STORAGE_KEY);
-    setUser(null);
-    setActiveMembershipState(null);
+    if (typeof window !== "undefined") {
+      localStorage.removeItem("last_activity");
+      localStorage.removeItem(LAST_AUTH_REDIRECT_STORAGE_KEY);
+    }
+
     setAuthError(null);
-    authErrorRef.current = null;
-  }, []);
+    queryClient.setQueryData(authKeys.session(), EMPTY_SESSION);
+    clearScopedQueries();
+  }, [clearScopedQueries, queryClient, setAuthError]);
 
   const expireAuthSession = useCallback(() => {
-    if (isSigningOutRef.current) return;
+    if (isSigningOutRef.current || typeof window === "undefined") return;
 
     const signInUrl = buildAuthUrl(
       "/sign-in",
@@ -332,87 +266,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     );
 
     isSigningOutRef.current = true;
+    void fetch("/api/auth/logout", {
+      credentials: "same-origin",
+      method: "POST",
+    });
     clearAuthState();
     router.replace(signInUrl);
   }, [clearAuthState, router]);
-
-  const refreshUser = useCallback(async () => {
-    const token = getStoredAccessToken() || (await refreshStoredAccessToken());
-    if (!token) {
-      expireAuthSession();
-      return null;
-    }
-
-    const headers = getActiveContextHeaders();
-    headers.set("Authorization", `Bearer ${token}`);
-
-    let response: Response;
-    try {
-      response = await fetch(`${API_URL}/api/v1/auth/me/`, {
-        headers,
-      });
-
-      if (response.status === 401) {
-        const refreshedToken = await refreshStoredAccessToken();
-        if (refreshedToken) {
-          headers.set("Authorization", `Bearer ${refreshedToken}`);
-          response = await fetch(`${API_URL}/api/v1/auth/me/`, {
-            headers,
-          });
-        }
-      }
-    } catch {
-      localStorage.removeItem("user");
-      setUser(null);
-      setActiveMembershipState(null);
-      setAuthError(BACKEND_UNREACHABLE_MESSAGE);
-      authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
-      return null;
-    }
-
-    if (!response.ok) {
-      const message = await readAuthError(response);
-      if (response.status === 401) {
-        expireAuthSession();
-        return null;
-      }
-      if (response.status === 403) {
-        clearAuthState();
-      }
-      setAuthError(message);
-      authErrorRef.current = message;
-      return null;
-    }
-
-    const nextUser = (await response.json()) as User;
-    applyUser(nextUser);
-    return nextUser;
-  }, [applyUser, clearAuthState, expireAuthSession]);
-
-  const refreshUserWithError = useCallback(async () => {
-    const nextUser = await refreshUser();
-    return { user: nextUser, error: nextUser ? null : authErrorRef.current };
-  }, [refreshUser]);
-
-  const applyTokenPayload = useCallback(
-    (payload: {
-      access: string;
-      refresh: string;
-      user: User;
-      redirect_url?: string;
-    }) => {
-      localStorage.setItem(ACCESS_TOKEN_STORAGE_KEY, payload.access);
-      localStorage.setItem(REFRESH_TOKEN_STORAGE_KEY, payload.refresh);
-      applyUser(payload.user);
-      return {
-        user: payload.user,
-        error: null,
-        pending: null,
-        redirectUrl: payload.redirect_url || null,
-      };
-    },
-    [applyUser],
-  );
 
   const readAuthResult = useCallback(
     async (
@@ -429,20 +289,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!response.ok) {
         const message = await readApiError(response, fallback);
         setAuthError(message);
-        authErrorRef.current = message;
         return { user: null, error: message, pending: null };
       }
 
-      const payload = (await response.json()) as {
-        access: string;
-        refresh: string;
-        user: User;
-        redirect_url?: string;
+      const payload = (await response.json()) as AuthSession & {
+        redirect_url?: string | null;
       };
 
-      return applyTokenPayload(payload);
+      setSession({
+        user: payload.user,
+        active_membership: payload.active_membership,
+      });
+      clearScopedQueries();
+
+      return {
+        user: payload.user,
+        error: null,
+        pending: null,
+        redirectUrl: payload.redirect_url || null,
+      };
     },
-    [applyTokenPayload],
+    [clearScopedQueries, setAuthError, setSession],
   );
 
   const postAuthRequest = useCallback(
@@ -453,37 +320,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     ): Promise<AuthResult> => {
       setIsAuthActionLoading(true);
       setAuthError(null);
-      authErrorRef.current = null;
 
       try {
-        const response = await fetch(`${API_URL}${path}`, {
-          method: "POST",
+        const response = await fetch(`/api/auth${path}`, {
+          body: JSON.stringify(body),
+          credentials: "same-origin",
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify(body),
+          method: "POST",
         });
 
         return readAuthResult(response, fallback);
       } catch {
-        setAuthError(BACKEND_UNREACHABLE_MESSAGE);
-        authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
+        const message = "Could not reach the app backend.";
+        setAuthError(message);
         return {
           user: null,
-          error: BACKEND_UNREACHABLE_MESSAGE,
+          error: message,
           pending: null,
         };
       } finally {
         setIsAuthActionLoading(false);
       }
     },
-    [readAuthResult],
+    [readAuthResult, setAuthError],
   );
 
   const loginWithPassword = useCallback(
     (identifier: string, password: string) => {
       return postAuthRequest(
-        "/api/v1/auth/login/password/",
+        "/login/password",
         { identifier, password },
         "Could not sign in. Please check your details.",
       );
@@ -493,44 +360,46 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const login = loginWithPassword;
 
-  const requestOtp = useCallback(async (identifier: string) => {
-    setIsAuthActionLoading(true);
-    setAuthError(null);
-    authErrorRef.current = null;
+  const requestOtp = useCallback(
+    async (identifier: string) => {
+      setIsAuthActionLoading(true);
+      setAuthError(null);
 
-    try {
-      const response = await fetch(`${API_URL}/api/v1/auth/login/otp/start/`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ identifier }),
-      });
+      try {
+        const response = await fetch("/api/auth/login/otp/start", {
+          body: JSON.stringify({ identifier }),
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        });
 
-      if (!response.ok) {
-        const message = await readApiError(
-          response,
-          "Could not send a sign-in code.",
-        );
+        if (!response.ok) {
+          const message = await readApiError(
+            response,
+            "Could not send a sign-in code.",
+          );
+          setAuthError(message);
+          return { ok: false, error: message };
+        }
+
+        return { ok: true, error: null };
+      } catch {
+        const message = "Could not reach the app backend.";
         setAuthError(message);
-        authErrorRef.current = message;
         return { ok: false, error: message };
+      } finally {
+        setIsAuthActionLoading(false);
       }
-
-      return { ok: true, error: null };
-    } catch {
-      setAuthError(BACKEND_UNREACHABLE_MESSAGE);
-      authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
-      return { ok: false, error: BACKEND_UNREACHABLE_MESSAGE };
-    } finally {
-      setIsAuthActionLoading(false);
-    }
-  }, []);
+    },
+    [setAuthError],
+  );
 
   const verifyOtp = useCallback(
     (identifier: string, code: string) => {
       return postAuthRequest(
-        "/api/v1/auth/login/otp/verify/",
+        "/login/otp/verify",
         { identifier, code },
         "Could not verify the sign-in code.",
       );
@@ -538,49 +407,54 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [postAuthRequest],
   );
 
-  const startGoogleLogin = useCallback(async (redirectUrl: string) => {
-    setIsAuthActionLoading(true);
-    setAuthError(null);
-    authErrorRef.current = null;
+  const startGoogleLogin = useCallback(
+    async (redirectUrl: string) => {
+      setIsAuthActionLoading(true);
+      setAuthError(null);
 
-    try {
-      const params = new URLSearchParams({ redirect_url: redirectUrl });
-      const response = await fetch(
-        `${API_URL}/api/v1/auth/login/google/start/?${params.toString()}`,
-      );
-      if (!response.ok) {
-        const message = await readApiError(
-          response,
-          "Could not start Google sign-in.",
+      try {
+        const params = new URLSearchParams({ redirect_url: redirectUrl });
+        const response = await fetch(
+          `/api/auth/login/google/start?${params.toString()}`,
+          {
+            credentials: "same-origin",
+          },
         );
-        setAuthError(message);
-        authErrorRef.current = message;
-        return { error: message };
-      }
+        if (!response.ok) {
+          const message = await readApiError(
+            response,
+            "Could not start Google sign-in.",
+          );
+          setAuthError(message);
+          return { error: message };
+        }
 
-      const payload = (await response.json()) as { authorization_url?: string };
-      if (!payload.authorization_url) {
-        const message = "Could not start Google sign-in.";
-        setAuthError(message);
-        authErrorRef.current = message;
-        return { error: message };
-      }
+        const payload = (await response.json()) as {
+          authorization_url?: string;
+        };
+        if (!payload.authorization_url) {
+          const message = "Could not start Google sign-in.";
+          setAuthError(message);
+          return { error: message };
+        }
 
-      window.location.assign(payload.authorization_url);
-      return { error: null };
-    } catch {
-      setAuthError(BACKEND_UNREACHABLE_MESSAGE);
-      authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
-      return { error: BACKEND_UNREACHABLE_MESSAGE };
-    } finally {
-      setIsAuthActionLoading(false);
-    }
-  }, []);
+        window.location.assign(payload.authorization_url);
+        return { error: null };
+      } catch {
+        const message = "Could not reach the app backend.";
+        setAuthError(message);
+        return { error: message };
+      } finally {
+        setIsAuthActionLoading(false);
+      }
+    },
+    [setAuthError],
+  );
 
   const exchangeGoogleLogin = useCallback(
     (exchangeCode: string) => {
       return postAuthRequest(
-        "/api/v1/auth/login/google/exchange/",
+        "/login/google/exchange",
         { exchange_code: exchangeCode },
         "Could not complete Google sign-in.",
       );
@@ -591,7 +465,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const exchangeGoogleCode = useCallback(
     (code: string, state: string) => {
       return postAuthRequest(
-        "/api/v1/auth/login/google/exchange/",
+        "/login/google/exchange",
         { code, state },
         "Could not complete Google sign-in.",
       );
@@ -599,53 +473,53 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [postAuthRequest],
   );
 
-  const challengeMfa = useCallback(async (authenticationFactorId: string) => {
-    setIsAuthActionLoading(true);
-    setAuthError(null);
-    authErrorRef.current = null;
+  const challengeMfa = useCallback(
+    async (authenticationFactorId: string) => {
+      setIsAuthActionLoading(true);
+      setAuthError(null);
 
-    try {
-      const response = await fetch(
-        `${API_URL}/api/v1/auth/login/mfa/challenge/`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
+      try {
+        const response = await fetch("/api/auth/login/mfa/challenge", {
           body: JSON.stringify({
             authentication_factor_id: authenticationFactorId,
           }),
-        },
-      );
+          credentials: "same-origin",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          method: "POST",
+        });
 
-      if (!response.ok) {
-        const message = await readApiError(
-          response,
-          "Could not start MFA verification.",
-        );
+        if (!response.ok) {
+          const message = await readApiError(
+            response,
+            "Could not start MFA verification.",
+          );
+          setAuthError(message);
+          return { authenticationChallengeId: null, error: message };
+        }
+
+        const payload = (await response.json()) as {
+          authentication_challenge_id?: string;
+        };
+        return {
+          authenticationChallengeId:
+            payload.authentication_challenge_id || null,
+          error: null,
+        };
+      } catch {
+        const message = "Could not reach the app backend.";
         setAuthError(message);
-        authErrorRef.current = message;
-        return { authenticationChallengeId: null, error: message };
+        return {
+          authenticationChallengeId: null,
+          error: message,
+        };
+      } finally {
+        setIsAuthActionLoading(false);
       }
-
-      const payload = (await response.json()) as {
-        authentication_challenge_id?: string;
-      };
-      return {
-        authenticationChallengeId: payload.authentication_challenge_id || null,
-        error: null,
-      };
-    } catch {
-      setAuthError(BACKEND_UNREACHABLE_MESSAGE);
-      authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
-      return {
-        authenticationChallengeId: null,
-        error: BACKEND_UNREACHABLE_MESSAGE,
-      };
-    } finally {
-      setIsAuthActionLoading(false);
-    }
-  }, []);
+    },
+    [setAuthError],
+  );
 
   const verifyMfa = useCallback(
     (
@@ -654,7 +528,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       code: string,
     ) => {
       return postAuthRequest(
-        "/api/v1/auth/login/mfa/verify/",
+        "/login/mfa/verify",
         {
           pending_authentication_token: pendingAuthenticationToken,
           authentication_challenge_id: authenticationChallengeId,
@@ -669,7 +543,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const selectOrganization = useCallback(
     (pendingAuthenticationToken: string, organizationId: string) => {
       return postAuthRequest(
-        "/api/v1/auth/login/organization/select/",
+        "/login/organization/select",
         {
           pending_authentication_token: pendingAuthenticationToken,
           organization_id: organizationId,
@@ -683,63 +557,99 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const syncAuthProfile = useCallback(async () => {
     setIsAuthActionLoading(true);
     setAuthError(null);
-    authErrorRef.current = null;
 
     try {
-      const response = await fetchWithAuth("/api/v1/auth/sync/", {
+      const response = await fetch("/api/auth/sync", {
+        credentials: "same-origin",
         method: "POST",
       });
 
       if (!response.ok) {
-        const message = await readAuthError(response);
-        if (isAuthRejection(response)) {
+        const message = await readApiError(response);
+        if (response.status === 401 || response.status === 403) {
           clearAuthState();
         }
         setAuthError(message);
-        authErrorRef.current = message;
         return null;
       }
 
-      const nextUser = (await response.json()) as User;
-      applyUser(nextUser);
-      return nextUser;
+      const payload = (await response.json()) as AuthSession;
+      setSession(payload);
+      return payload.user;
     } catch {
-      setAuthError(BACKEND_UNREACHABLE_MESSAGE);
-      authErrorRef.current = BACKEND_UNREACHABLE_MESSAGE;
+      const message = "Could not reach the app backend.";
+      setAuthError(message);
       return null;
     } finally {
       setIsAuthActionLoading(false);
     }
-  }, [applyUser, clearAuthState]);
+  }, [clearAuthState, setAuthError, setSession]);
 
-  useEffect(() => {
-    let isMounted = true;
+  const refreshUser = useCallback(async () => {
+    const nextSession = await queryClient.fetchQuery({
+      queryKey: authKeys.session(),
+      queryFn: fetchAuthSession,
+    });
 
-    const loadUser = async () => {
-      setIsInitializing(true);
-      migrateStoredUserContext();
+    if (!nextSession.user) {
+      return null;
+    }
 
-      if (getStoredRefreshToken()) {
-        await refreshUser();
-      } else {
-        clearAuthState();
-      }
-      if (isMounted) setIsInitializing(false);
-    };
+    setSession(nextSession);
+    return nextSession.user;
+  }, [queryClient, setSession]);
 
-    loadUser();
-
-    return () => {
-      isMounted = false;
-    };
-  }, [clearAuthState, refreshUser]);
+  const refreshUserWithError = useCallback(async () => {
+    const nextUser = await refreshUser();
+    return { user: nextUser, error: nextUser ? null : authErrorRef.current };
+  }, [refreshUser]);
 
   const logout = useCallback(async () => {
     if (isSigningOutRef.current) return;
     isSigningOutRef.current = true;
+
+    await fetch("/api/auth/logout", {
+      credentials: "same-origin",
+      method: "POST",
+    }).catch(() => undefined);
+
     clearAuthState();
     router.push("/sign-in");
   }, [clearAuthState, router]);
+
+  const activeMembershipMutation = useMutation({
+    mutationFn: async (membership: Membership) => {
+      const response = await postJson(
+        "/api/auth/active-membership",
+        { membershipId: membership.id },
+        { fallback: "Could not switch active membership." },
+      );
+      return (await response.json()) as AuthSession;
+    },
+    onMutate: (membership) => {
+      queryClient.setQueryData<AuthSession>(
+        authKeys.session(),
+        (current = EMPTY_SESSION) => ({
+          ...current,
+          active_membership: membership,
+        }),
+      );
+    },
+    onError: (error) => {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Could not switch active membership.";
+      setAuthError(message);
+      void queryClient.invalidateQueries({ queryKey: authKeys.session() });
+    },
+    onSuccess: (nextSession) => {
+      setSession(nextSession);
+      clearScopedQueries();
+      router.refresh();
+    },
+  });
+  const { mutate: mutateActiveMembership } = activeMembershipMutation;
 
   useEffect(() => {
     window.addEventListener("metro:auth-expired", expireAuthSession);
@@ -748,19 +658,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [expireAuthSession]);
 
-  const setActiveMembership = useCallback((membership: Membership) => {
-    setActiveMembershipState(membership);
-    setStoredActiveContext(membership);
-  }, []);
+  const setActiveMembership = useCallback(
+    (membership: Membership) => {
+      mutateActiveMembership(membership);
+    },
+    [mutateActiveMembership],
+  );
 
-  const can = useCallback((permission: Permission) => {
-    if (!user) return false;
-    const permissions =
-      activeMembership?.permissions !== undefined
-        ? activeMembership.permissions
-        : user.permissions || [];
-    return permissions.includes("*") || permissions.includes(permission);
-  }, [activeMembership, user]);
+  const can = useCallback(
+    (permission: Permission) => {
+      if (!user) return false;
+      const permissions =
+        activeMembership?.permissions !== undefined
+          ? activeMembership.permissions
+          : user.permissions || [];
+      return permissions.includes("*") || permissions.includes(permission);
+    },
+    [activeMembership, user],
+  );
 
   const value = useMemo(
     () => ({

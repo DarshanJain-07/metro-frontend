@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Building2, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 
@@ -12,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { CompactInput } from "@/components/ui/form-elements";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
+import { masterKeys } from "@/lib/query-keys";
 
 type GlobalOffice = {
   id: string;
@@ -45,12 +47,16 @@ function normalizeList<T>(payload: ApiList<T>): T[] {
   return Array.isArray(payload) ? payload : payload.results || [];
 }
 
-async function fetchAllPages<T>(path: string, fallbackError: string): Promise<T[] | null> {
+async function fetchAllPages<T>(
+  path: string,
+  fallbackError: string,
+  signal?: AbortSignal,
+): Promise<T[] | null> {
   const records: T[] = [];
   let nextUrl: string | null = path;
 
   while (nextUrl) {
-    const res = await fetchWithAuth(nextUrl);
+    const res = await fetchWithAuth(nextUrl, { signal });
     if (res.status === 401) return null;
     if (!res.ok) {
       throw new Error(await readApiError(res, fallbackError));
@@ -70,44 +76,44 @@ function officeLocation(office: GlobalOffice) {
 
 export default function DiscoveryPage() {
   const { activeMembership, can } = useAuth();
-  const [globalOffices, setGlobalOffices] = useState<GlobalOffice[]>([]);
-  const [currentOffices, setCurrentOffices] = useState<CompanyOffice[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
   const [searchQuery, setSearchQuery] = useState("");
   const [expandedCompanyId, setExpandedCompanyId] = useState<string | null>(null);
-  const [importingCompanyId, setImportingCompanyId] = useState<string | null>(null);
-  const [importingOfficeId, setImportingOfficeId] = useState<string | null>(null);
   const canImport = can("*");
+  const discoveryQueryKey = masterKeys.list(
+    activeMembership?.id,
+    "/api/v1/master/discovery/",
+  );
 
-  const loadDiscovery = useCallback(async () => {
-    setIsLoading(true);
-    try {
+  const discoveryQuery = useQuery({
+    queryKey: discoveryQueryKey,
+    queryFn: async ({ signal }) => {
       const [globalRecords, officeRecords] = await Promise.all([
         fetchAllPages<GlobalOffice>(
           "/api/v1/master/global-offices/?include_inactive=false&ordering=name&page_size=1000",
           "Could not load discovery directory.",
+          signal,
         ),
         fetchAllPages<CompanyOffice>(
           "/api/v1/master/offices/?include_inactive=true&page_size=1000",
           "Could not load current branches.",
+          signal,
         ),
       ]);
 
-      if (!globalRecords || !officeRecords) return;
+      return {
+        globalOffices: globalRecords || [],
+        currentOffices: officeRecords || [],
+      };
+    },
+    initialData: {
+      globalOffices: [] as GlobalOffice[],
+      currentOffices: [] as CompanyOffice[],
+    },
+  });
 
-      setGlobalOffices(globalRecords);
-      setCurrentOffices(officeRecords);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Could not load discovery directory.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    loadDiscovery();
-  }, [loadDiscovery]);
+  const globalOffices = discoveryQuery.data.globalOffices;
+  const currentOffices = discoveryQuery.data.currentOffices;
 
   const activeCompanyId = activeMembership?.company ? String(activeMembership.company) : null;
 
@@ -157,50 +163,56 @@ export default function DiscoveryPage() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [activeCompanyId, globalOffices, importedGlobalOfficeIds, searchQuery]);
 
-  const importCompany = async (company: DiscoveredCompany) => {
-    setImportingCompanyId(company.id);
-    try {
+  const importCompanyMutation = useMutation({
+    mutationFn: async (company: DiscoveredCompany) => {
       const res = await fetchWithAuth("/api/v1/master/offices/import-company-offices/", {
         method: "POST",
         body: JSON.stringify({ owner_company: company.id, office_type: "PARTNER" }),
       });
 
-      if (res.status === 401) return;
+      if (res.status === 401) {
+        throw new Error("Authentication session expired.");
+      }
       if (!res.ok) {
         throw new Error(await readApiError(res, "Could not import company offices."));
       }
 
       const created = normalizeList(await res.json().catch(() => []));
-      toast.success(`Imported ${created.length} office${created.length === 1 ? "" : "s"} from ${company.name}`);
-      await loadDiscovery();
-    } catch (err) {
+      return { company, count: created.length };
+    },
+    onSuccess: ({ company, count }) => {
+      toast.success(`Imported ${count} office${count === 1 ? "" : "s"} from ${company.name}`);
+      void queryClient.invalidateQueries({ queryKey: discoveryQueryKey });
+    },
+    onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Could not import company offices.");
-    } finally {
-      setImportingCompanyId(null);
-    }
-  };
+    },
+  });
 
-  const importOffice = async (office: GlobalOffice) => {
-    setImportingOfficeId(office.id);
-    try {
+  const importOfficeMutation = useMutation({
+    mutationFn: async (office: GlobalOffice) => {
       const res = await fetchWithAuth("/api/v1/master/offices/import/", {
         method: "POST",
         body: JSON.stringify({ global_office: office.id, office_type: "PARTNER" }),
       });
 
-      if (res.status === 401) return;
+      if (res.status === 401) {
+        throw new Error("Authentication session expired.");
+      }
       if (!res.ok) {
         throw new Error(await readApiError(res, "Could not import office."));
       }
 
+      return office;
+    },
+    onSuccess: (office) => {
       toast.success(`${office.name} imported as a partner branch`);
-      await loadDiscovery();
-    } catch (err) {
+      void queryClient.invalidateQueries({ queryKey: discoveryQueryKey });
+    },
+    onError: (err) => {
       toast.error(err instanceof Error ? err.message : "Could not import office.");
-    } finally {
-      setImportingOfficeId(null);
-    }
-  };
+    },
+  });
 
   const columns: DataTableColumn<DiscoveredCompany>[] = [
     {
@@ -263,7 +275,7 @@ export default function DiscoveryPage() {
         <DataTable<DiscoveredCompany>
           data={companies}
           columns={columns}
-          isLoading={isLoading}
+          isLoading={discoveryQuery.isLoading}
           emptyMessage="No external companies found."
           onRowClick={(company) => setExpandedCompanyId(company.id)}
           rowClassName="cursor-pointer"
@@ -271,7 +283,9 @@ export default function DiscoveryPage() {
             canImport
               ? (company) => {
                   const allImported = company.importedCount === company.offices.length;
-                  const isImporting = importingCompanyId === company.id;
+                  const isImporting =
+                    importCompanyMutation.isPending &&
+                    importCompanyMutation.variables?.id === company.id;
                   return (
                     <Button
                       size="sm"
@@ -279,7 +293,7 @@ export default function DiscoveryPage() {
                       disabled={allImported || isImporting}
                       onClick={(event) => {
                         event.stopPropagation();
-                        importCompany(company);
+                        importCompanyMutation.mutate(company);
                       }}
                     >
                       {isImporting ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
@@ -314,7 +328,9 @@ export default function DiscoveryPage() {
               <div className="space-y-2">
                 {expandedCompany.offices.map((office) => {
                   const isImported = importedGlobalOfficeIds.has(office.id);
-                  const isImporting = importingOfficeId === office.id;
+                  const isImporting =
+                    importOfficeMutation.isPending &&
+                    importOfficeMutation.variables?.id === office.id;
                   return (
                     <div key={office.id} className="rounded-md border border-border p-3">
                       <div className="flex items-start justify-between gap-3">
@@ -332,7 +348,7 @@ export default function DiscoveryPage() {
                             size="sm"
                             variant={isImported ? "outline" : "default"}
                             disabled={isImported || isImporting}
-                            onClick={() => importOffice(office)}
+                            onClick={() => importOfficeMutation.mutate(office)}
                           >
                             {isImporting ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
                             {isImported ? "Imported" : "Import"}
