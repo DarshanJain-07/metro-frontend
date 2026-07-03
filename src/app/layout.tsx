@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import localFont from "next/font/local";
 import { Suspense } from "react";
 import { dehydrate } from "@tanstack/react-query";
 import "./globals.css";
@@ -15,9 +15,21 @@ import { makeQueryClient } from "@/lib/query-client";
 import { QueryProvider } from "@/lib/query-provider";
 import { getServerAuthSession, hasAuthCookies } from "@/lib/server-auth";
 
-const inter = Inter({
-  subsets: ["latin"],
+const inter = localFont({
+  src: [
+    {
+      path: "./fonts/inter/Inter-VariableFont_opsz-wght.ttf",
+      style: "normal",
+      weight: "100 900",
+    },
+    {
+      path: "./fonts/inter/Inter-Italic-VariableFont_opsz-wght.ttf",
+      style: "italic",
+      weight: "100 900",
+    },
+  ],
   variable: "--font-inter",
+  display: "swap",
 });
 
 export const metadata: Metadata = {
