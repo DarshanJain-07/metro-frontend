@@ -315,23 +315,38 @@ async function handleAuthRequest(
   request: NextRequest,
   context: AuthRouteContext,
 ) {
-  const { path = [] } = await context.params;
-  const routeKey = path.join("/");
+  try {
+    const { path = [] } = await context.params;
+    const routeKey = path.join("/");
 
-  if (routeKey === "logout") {
-    return handleLogout(request);
+    if (routeKey === "logout") {
+      return handleLogout(request);
+    }
+
+    if (routeKey === "active-membership") {
+      return handleActiveMembership(request);
+    }
+
+    const routeConfig = AUTH_ROUTE_MAP[routeKey];
+    if (!routeConfig) {
+      return NextResponse.json({ detail: "Not found." }, { status: 404 });
+    }
+
+    return handleMappedAuthRoute(request, routeKey, routeConfig);
+  } catch (error) {
+    console.error("Auth proxy request failed", error);
+
+    const message =
+      error instanceof Error &&
+      error.message === "API_URL or NEXT_PUBLIC_API_URL is not defined"
+        ? "Backend API URL is not configured for this deployment."
+        : "Could not reach the backend service.";
+
+    return NextResponse.json(
+      { detail: message },
+      { status: message.includes("not configured") ? 500 : 502 },
+    );
   }
-
-  if (routeKey === "active-membership") {
-    return handleActiveMembership(request);
-  }
-
-  const routeConfig = AUTH_ROUTE_MAP[routeKey];
-  if (!routeConfig) {
-    return NextResponse.json({ detail: "Not found." }, { status: 404 });
-  }
-
-  return handleMappedAuthRoute(request, routeKey, routeConfig);
 }
 
 export const GET = handleAuthRequest;

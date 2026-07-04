@@ -11,7 +11,6 @@ import {
   getCookieSecurityOptions,
 } from "@/lib/auth-cookies";
 import type { AuthSession, Membership, User } from "@/lib/auth-types";
-import { API_URL } from "@/lib/api";
 
 type BackendFetchResult = {
   response: Response;
@@ -46,7 +45,13 @@ const HOP_BY_HOP_HEADERS = new Set([
 ]);
 
 function getBackendBaseUrl() {
-  return process.env.API_URL || API_URL;
+  const apiUrl = process.env.API_URL || process.env.NEXT_PUBLIC_API_URL;
+
+  if (!apiUrl) {
+    throw new Error("API_URL or NEXT_PUBLIC_API_URL is not defined");
+  }
+
+  return apiUrl;
 }
 
 export function getBackendUrl(path: string, search = "") {
