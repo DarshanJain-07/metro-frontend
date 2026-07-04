@@ -47,6 +47,7 @@ type PodFormState = {
 };
 
 const PAGE_SIZE = 25;
+const DEFAULT_DELIVERY_FILTERS = { delivery_type: "DOOR" } as const;
 
 const statusLabels: Record<string, string> = {
   BOOKED: "Booked",
@@ -75,7 +76,7 @@ export function DeliveryList({
   apiPath = "/api/v1/shipments/incoming/",
   defaultStatus = null,
   emptyMessage = "No delivery dockets found matching your filters.",
-  fixedFilters = { delivery_type: "DOOR" },
+  fixedFilters = DEFAULT_DELIVERY_FILTERS,
 }: DeliveryListProps) {
   const { activeMembership, can, isLoading: isAuthLoading } = useAuth();
   const queryClient = useQueryClient();
@@ -111,11 +112,13 @@ export function DeliveryList({
       ...fixedFilters,
     };
   }, [branchId, defaultStatus, fixedFilters, searchParams]);
+  const effectiveApiPath =
+    filters.status === "DELIVERED" ? "/api/v1/shipments/" : apiPath;
 
   const deliveryQuery = useQuery({
-    queryKey: docketKeys.list(activeMembershipId, apiPath, filters),
+    queryKey: docketKeys.list(activeMembershipId, effectiveApiPath, filters),
     queryFn: async ({ signal }) => {
-      const result = await getDockets(filters, { apiPath, signal });
+      const result = await getDockets(filters, { apiPath: effectiveApiPath, signal });
       if (result.success && result.data) return result.data;
       throw new Error(result.error || "Could not load delivery dockets.");
     },

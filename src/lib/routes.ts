@@ -79,9 +79,5 @@ export function getRequiredPermissions(pathname: string): Permission[] | null {
     return ["shipment:view"];
   }
 
-  if (pathname.startsWith('/delivery/')) {
-    return ["shipment:view"];
-  }
-
   return null;
 }

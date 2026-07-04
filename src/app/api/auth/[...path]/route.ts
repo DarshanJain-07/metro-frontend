@@ -113,8 +113,51 @@ async function readJsonPayload(response: Response) {
   return response.json().catch(() => null);
 }
 
-async function handleLogout() {
-  const response = NextResponse.json({ ok: true });
+async function revokeRefreshToken(refreshToken: string) {
+  try {
+    const response = await backendFetch(
+      "/api/v1/auth/logout/",
+      {
+        body: JSON.stringify({ refresh: refreshToken }),
+        headers: {
+          "Content-Type": "application/json",
+        },
+        method: "POST",
+      },
+      null,
+    );
+
+    const payload = (await readJsonPayload(response)) as {
+      revoked?: boolean;
+    } | null;
+
+    return {
+      ok: response.ok,
+      revoked: response.ok && payload?.revoked === true,
+    };
+  } catch {
+    return {
+      ok: false,
+      revoked: false,
+    };
+  }
+}
+
+async function handleLogout(request: NextRequest) {
+  if (request.method.toUpperCase() !== "POST") {
+    return NextResponse.json({ detail: "Method not allowed." }, { status: 405 });
+  }
+
+  const refreshToken =
+    request.cookies.get(AUTH_COOKIE_NAMES.refreshToken)?.value || null;
+  const revokeResult = refreshToken
+    ? await revokeRefreshToken(refreshToken)
+    : { ok: true, revoked: false };
+
+  const response = NextResponse.json(
+    { ok: true, revoked: revokeResult.revoked },
+    { status: revokeResult.ok ? 200 : 502 },
+  );
   clearAuthCookies(response);
   return response;
 }
@@ -276,7 +319,7 @@ async function handleAuthRequest(
   const routeKey = path.join("/");
 
   if (routeKey === "logout") {
-    return handleLogout();
+    return handleLogout(request);
   }
 
   if (routeKey === "active-membership") {

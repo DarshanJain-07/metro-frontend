@@ -3,7 +3,6 @@ import { Suspense } from "react";
 import { ContentSkeleton } from "@/components/app-skeleton";
 import { PageContainer } from "@/components/page-container";
 import { DocketsFilters } from "@/app/dockets/_components/dockets-filters";
-import { DeliveryTabs } from "@/app/delivery/_components/delivery-tabs";
 import { DeliveryList } from "@/app/delivery/_components/delivery-list";
 
 const deliveryStatusOptions = [
@@ -11,6 +10,7 @@ const deliveryStatusOptions = [
   { label: "In Transit", value: "IN_TRANSIT" },
   { label: "Received", value: "RECEIVED" },
   { label: "Out for Delivery", value: "OUT_FOR_DELIVERY" },
+  { label: "Delivered", value: "DELIVERED" },
 ];
 
 export default function DeliveryPage() {
@@ -26,7 +26,6 @@ export default function DeliveryPage() {
             statusPlaceholder="All Pending"
             defaultStatus={null}
           />
-          <DeliveryTabs />
           <div className="min-h-0 flex-1 overflow-hidden">
             <DeliveryList defaultStatus={null} />
           </div>

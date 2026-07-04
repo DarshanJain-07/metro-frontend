@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Building2, Loader2, Search } from "lucide-react";
+import { Building2, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { DataTable, DataTableColumn } from "@/components/data-table";
@@ -10,7 +10,7 @@ import { PageContainer } from "@/components/page-container";
 import { PageHeader } from "@/components/page-header";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { CompactInput } from "@/components/ui/form-elements";
+import { SearchInput } from "@/components/ui/search-input";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { masterKeys } from "@/lib/query-keys";
@@ -258,16 +258,12 @@ export default function DiscoveryPage() {
       <PageHeader
         title="Discovery"
         actions={
-          <div className="relative w-80">
-            <Search className="absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
-            <CompactInput
-              type="search"
-              placeholder="Search companies, offices or cities..."
-              className="pl-9"
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-            />
-          </div>
+          <SearchInput
+            wrapperClassName="w-80"
+            placeholder="Search companies, offices or cities..."
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+          />
         }
       />
 

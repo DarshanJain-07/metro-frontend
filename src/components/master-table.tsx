@@ -12,7 +12,8 @@ import {
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { Button } from "@/components/ui/button";
-import { Plus, Edit, Loader2, Search, Upload, Download, FileSpreadsheet } from "lucide-react";
+import { Plus, Edit, Loader2, Upload, Download, FileSpreadsheet } from "lucide-react";
+import { SearchInput } from "@/components/ui/search-input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -476,23 +477,19 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
         title={title}
         actions={
           <div className="flex items-center gap-3">
-            <div className="relative w-80">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <CompactInput
-                type="search"
-                placeholder={searchPlaceholder || "Search..."}
-                className="pl-9"
-                value={searchQuery}
-                onChange={(e) => {
-                  const nextSearchQuery = e.target.value;
-                  setSearchDraft({
-                    value: nextSearchQuery,
-                    source: searchParamsString,
-                  });
-                  handleSearch(nextSearchQuery);
-                }}
-              />
-            </div>
+            <SearchInput
+              wrapperClassName="w-80"
+              placeholder={searchPlaceholder || "Search..."}
+              value={searchQuery}
+              onChange={(e) => {
+                const nextSearchQuery = e.target.value;
+                setSearchDraft({
+                  value: nextSearchQuery,
+                  source: searchParamsString,
+                });
+                handleSearch(nextSearchQuery);
+              }}
+            />
             <div className="flex items-center gap-2">
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>

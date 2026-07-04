@@ -2,9 +2,10 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Search, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CompactInput, CompactSelect, FormLabel } from "@/components/ui/form-elements";
+import { CompactSelect, FormLabel } from "@/components/ui/form-elements";
+import { SearchInput } from "@/components/ui/search-input";
 import Link from "next/link";
 
 import { formatDateForInput, formatDateForApi } from "@/lib/utils";
@@ -140,15 +141,11 @@ export function DocketsFilters({
       <Surface className="flex flex-wrap items-end gap-3">
         <div className="flex-1 min-w-[300px]">
           <FormLabel>Search Dockets</FormLabel>
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
-            <CompactInput 
-              placeholder="Search by docket no, party, city..." 
-              className="pl-8"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-            />
-          </div>
+          <SearchInput
+            placeholder="Search by docket no, party, city..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+          />
         </div>
 
         <div className="w-44">
