@@ -1151,7 +1151,7 @@ export function DocketFormClient({
       date: formatDateForInput(docket.date),
       origin_branch: String(docket.origin_office || ""),
       to_city: String(docket.to_city),
-      destination_branch: String(docket.destination_branch),
+      destination_branch: String(docket.destination_office || docket.destination_branch || ""),
       consignor_city: String(docket.consignor_city),
       consignee_city: String(docket.consignee_city),
       additional_charges: Number(docket.additional_charges),

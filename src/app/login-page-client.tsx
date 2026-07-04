@@ -88,10 +88,15 @@ export function LoginPageClient() {
     verifyOtp,
   } = useAuth();
 
+  const redirectAfterAuth = useCallback((target: string) => {
+    router.replace(target);
+    router.refresh();
+  }, [router]);
+
   const completeAuthResult = useCallback(async (result: AuthResult, successMessage: string) => {
     if (result.user) {
       toast.success(successMessage);
-      router.push(result.redirectUrl || redirectTarget);
+      redirectAfterAuth(result.redirectUrl || redirectTarget);
       return;
     }
 
@@ -106,13 +111,13 @@ export function LoginPageClient() {
     if (result.error) {
       toast.error(result.error);
     }
-  }, [redirectTarget, router]);
+  }, [redirectAfterAuth, redirectTarget]);
 
   useEffect(() => {
     if (user) {
-      router.replace(redirectTarget);
+      redirectAfterAuth(redirectTarget);
     }
-  }, [redirectTarget, router, user]);
+  }, [redirectAfterAuth, redirectTarget, user]);
 
   useEffect(() => {
     const authError = searchParams.get("auth_error");

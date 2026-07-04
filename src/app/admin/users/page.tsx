@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { fetchWithAuth, readApiError } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 import { adminKeys, authKeys } from "@/lib/query-keys";
+import { Badge } from "@/components/ui/badge";
+import { Surface } from "@/components/ui/surface";
 import {
   Sheet,
   SheetContent,
@@ -45,18 +47,41 @@ type Role = string;
 interface RoleDefinition {
   code: string;
   name: string;
+  requires_office: boolean;
 }
 
 type Scope = "own" | "branch" | "region" | "company" | "all";
 const METRO_ROLE = "METRO";
+const DEFAULT_APPROVAL_ROLE = "SUPER_ADMIN";
 
 interface EffectiveRolePermission {
   code: string;
   scope: Scope;
 }
 
+interface Branch {
+  id: string;
+  name: string;
+}
+
+interface SignupRequest {
+  id: string;
+  full_name: string;
+  email: string;
+  phone: string;
+  company_name: string;
+  message: string;
+  status: "PENDING" | "APPROVED" | "REJECTED";
+  created_at: string;
+}
+
+interface ApprovalInput {
+  role: Role;
+  branch: string;
+}
+
 export default function UsersPage() {
-  const { activeMembership, can } = useAuth();
+  const { activeMembership, can, user } = useAuth();
   const queryClient = useQueryClient();
   const [selectedUser, setSelectedUser] = useState<User | null>(null);
   const [isTemplatesOpen, setIsTemplatesOpen] = useState(false);
@@ -68,8 +93,11 @@ export default function UsersPage() {
   const [isMutatingPermissions, setIsMutatingPermissions] = useState(false);
   const [savingCode, setSavingCode] = useState<string | null>(null);
   const [clipboard, setClipboard] = useState<Record<string, PermissionState> | null>(null);
+  const [approvalInputs, setApprovalInputs] = useState<Record<string, ApprovalInput>>({});
+  const [mutatingSignupId, setMutatingSignupId] = useState<string | null>(null);
 
   const canManageRoles = can("roles:manage");
+  const canApproveSignups = can("users:create") || !!user?.is_owner || !!user?.is_superuser;
 
   const {
     data: adminData,
@@ -95,11 +123,44 @@ export default function UsersPage() {
         roles: rolesPayload.results || rolesPayload,
       };
     },
-    enabled: canManageRoles,
+    enabled: canManageRoles || canApproveSignups,
     initialData: { catalog: [], roles: [] },
   });
   const catalog = adminData?.catalog ?? [];
   const roles = adminData?.roles ?? [];
+
+  const {
+    data: signupRequests = [],
+    error: signupRequestsError,
+  } = useQuery<SignupRequest[]>({
+    queryKey: [...adminKeys.all, "signup-requests", activeMembership?.id],
+    queryFn: async ({ signal }) => {
+      const response = await fetchWithAuth("/api/v1/auth/signup-requests/?status=PENDING", { signal });
+      if (!response.ok) {
+        throw new Error("Could not load signup requests.");
+      }
+      const payload = await response.json();
+      return payload.results || payload;
+    },
+    enabled: canApproveSignups,
+    initialData: [],
+  });
+
+  const {
+    data: branches = [],
+  } = useQuery<Branch[]>({
+    queryKey: [...adminKeys.all, "assignable-branches", activeMembership?.id],
+    queryFn: async ({ signal }) => {
+      const response = await fetchWithAuth("/api/v1/auth/users/assignable-branches/", { signal });
+      if (!response.ok) {
+        return [];
+      }
+      const payload = await response.json();
+      return payload.results || payload;
+    },
+    enabled: canApproveSignups,
+    initialData: [],
+  });
 
   const rolePermissionsQuery = useQuery<Record<string, PermissionState>>({
     queryKey: [
@@ -142,12 +203,76 @@ export default function UsersPage() {
       : loadedPermissions ?? {};
 
   useEffect(() => {
-    [adminDataError, permissionsError].forEach((error) => {
+    [adminDataError, permissionsError, signupRequestsError].forEach((error) => {
       if (error instanceof Error) {
         toast.error(error.message);
       }
     });
-  }, [adminDataError, permissionsError]);
+  }, [adminDataError, permissionsError, signupRequestsError]);
+
+  function approvalStateFor(request: SignupRequest) {
+    return approvalInputs[request.id] || {
+      role: roles.some((item) => item.code === DEFAULT_APPROVAL_ROLE)
+        ? DEFAULT_APPROVAL_ROLE
+        : roles[0]?.code || "",
+      branch: "",
+    };
+  }
+
+  function setApprovalState(requestId: string, next: Partial<ApprovalInput>) {
+    setApprovalInputs(prev => ({
+      ...prev,
+      [requestId]: {
+        role: next.role ?? prev[requestId]?.role ?? DEFAULT_APPROVAL_ROLE,
+        branch: next.branch ?? prev[requestId]?.branch ?? "",
+      },
+    }));
+  }
+
+  async function handleApproveSignup(request: SignupRequest) {
+    const approval = approvalStateFor(request);
+    if (!approval.role) {
+      toast.error("Select a role before approving.");
+      return;
+    }
+
+    setMutatingSignupId(request.id);
+    const selectedRole = roles.find((item) => item.code === approval.role);
+    const response = await fetchWithAuth(`/api/v1/auth/signup-requests/${request.id}/approve/`, {
+      method: "POST",
+      body: JSON.stringify({
+        role: approval.role,
+        branch: selectedRole?.requires_office ? approval.branch || null : null,
+      }),
+    });
+    setMutatingSignupId(null);
+
+    if (!response.ok) {
+      toast.error(await readApiError(response, "Could not approve signup."));
+      return;
+    }
+
+    toast.success("Signup approved.");
+    void queryClient.invalidateQueries({ queryKey: [...adminKeys.all, "signup-requests"] });
+    void queryClient.invalidateQueries({ queryKey: authKeys.session() });
+  }
+
+  async function handleRejectSignup(request: SignupRequest) {
+    setMutatingSignupId(request.id);
+    const response = await fetchWithAuth(`/api/v1/auth/signup-requests/${request.id}/reject/`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    setMutatingSignupId(null);
+
+    if (!response.ok) {
+      toast.error(await readApiError(response, "Could not reject signup."));
+      return;
+    }
+
+    toast.success("Signup rejected.");
+    void queryClient.invalidateQueries({ queryKey: [...adminKeys.all, "signup-requests"] });
+  }
 
   async function handleToggle(code: string, enabled: boolean) {
     if (!role || role === METRO_ROLE) return;
@@ -247,6 +372,87 @@ export default function UsersPage() {
   return (
     <PageContainer maxWidth="full">
       <div className="flex-1 h-full flex flex-col overflow-hidden">
+        {canApproveSignups && signupRequests.length > 0 && (
+          <Surface className="mb-4 shrink-0" padding="md">
+            <div className="mb-3 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">Pending signups</h2>
+                <p className="text-xs text-muted-foreground">Approve users into a role before they can sign in.</p>
+              </div>
+              <Badge variant="warning">{signupRequests.length} pending</Badge>
+            </div>
+            <div className="grid gap-3">
+              {signupRequests.map((request) => {
+                const approval = approvalStateFor(request);
+                const selectedRole = roles.find((item) => item.code === approval.role);
+                const needsBranch = !!selectedRole?.requires_office;
+                const isMutating = mutatingSignupId === request.id;
+                return (
+                  <div
+                    key={request.id}
+                    className="grid gap-3 rounded-md border border-border bg-background p-3 lg:grid-cols-[minmax(0,1fr)_160px_180px_auto] lg:items-end"
+                  >
+                    <div className="min-w-0">
+                      <div className="font-medium text-sm text-foreground">{request.full_name}</div>
+                      <div className="mt-1 grid gap-0.5 text-xs text-muted-foreground sm:grid-cols-2">
+                        <span className="truncate">{request.email}</span>
+                        <span className="truncate">{request.company_name}</span>
+                        {request.phone && <span className="truncate">{request.phone}</span>}
+                        {request.message && <span className="truncate">{request.message}</span>}
+                      </div>
+                    </div>
+
+                    <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+                      Role
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                        value={approval.role}
+                        onChange={(event) => setApprovalState(request.id, { role: event.target.value, branch: "" })}
+                      >
+                        {roles.map((item) => (
+                          <option key={item.code} value={item.code}>{item.name}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <label className="grid gap-1 text-xs font-medium text-muted-foreground">
+                      Branch
+                      <select
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground disabled:opacity-60"
+                        value={approval.branch}
+                        disabled={!needsBranch}
+                        onChange={(event) => setApprovalState(request.id, { branch: event.target.value })}
+                      >
+                        <option value="">{needsBranch ? "Select branch" : "Not required"}</option>
+                        {branches.map((branch) => (
+                          <option key={branch.id} value={branch.id}>{branch.name}</option>
+                        ))}
+                      </select>
+                    </label>
+
+                    <div className="flex gap-2 lg:justify-end">
+                      <Button
+                        size="sm"
+                        disabled={isMutating || (needsBranch && !approval.branch)}
+                        onClick={() => handleApproveSignup(request)}
+                      >
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isMutating}
+                        onClick={() => handleRejectSignup(request)}
+                      >
+                        Reject
+                      </Button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </Surface>
+        )}
         <MasterTable<User>
           title="Users & Roles"
           apiPath="/api/v1/auth/users/"

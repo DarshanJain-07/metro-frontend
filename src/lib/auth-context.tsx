@@ -296,11 +296,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         redirect_url?: string | null;
       };
 
+      await queryClient.cancelQueries({ queryKey: authKeys.session() });
+      clearScopedQueries();
       setSession({
         user: payload.user,
         active_membership: payload.active_membership,
       });
-      clearScopedQueries();
 
       return {
         user: payload.user,
@@ -309,7 +310,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         redirectUrl: payload.redirect_url || null,
       };
     },
-    [clearScopedQueries, setAuthError, setSession],
+    [clearScopedQueries, queryClient, setAuthError, setSession],
   );
 
   const postAuthRequest = useCallback(

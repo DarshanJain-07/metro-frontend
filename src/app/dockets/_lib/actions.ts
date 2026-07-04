@@ -12,6 +12,7 @@ export interface DocketListItem {
   date: string;
   origin_office?: string;
   origin_office_name?: string;
+  destination_office_name?: string;
   consignor_name: string;
   consignee_name: string;
   to_city_name: string;
@@ -55,11 +56,20 @@ export type DocketLineItem = DocketFormValues["line_items"][number] & {
 export type DocketDetail = DocketFormValues & {
   available_actions?: string[];
   company_name?: string | null;
+  lr_no?: string | null;
   docket_no?: string | null;
   total_amount?: string | number | null;
   origin_office?: string | number | null;
   origin_office_name?: string | null;
+  destination_office?: string | number | null;
+  destination_office_name?: string | null;
   destination_branch_name?: string | null;
+  freight?: string | number | null;
+  final_freight?: string | number | null;
+  remaining_balance?: string | number | null;
+  total_packages?: string | number | null;
+  total_actual_weight?: string | number | null;
+  total_charge_weight?: string | number | null;
   to_city_name?: string | null;
   consignor_city_name?: string | null;
   consignee_city_name?: string | null;

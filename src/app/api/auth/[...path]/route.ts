@@ -7,6 +7,7 @@ import {
   clearAuthCookies,
   fetchBackendWithCookieAuth,
   filterResponseHeaders,
+  hasAuthCookies,
   selectActiveMembership,
   setActiveMembershipCookies,
   setAuthCookies,
@@ -21,6 +22,11 @@ type TokenResponsePayload = {
   refresh?: string;
   user?: User;
   redirect_url?: string;
+};
+
+const EMPTY_SESSION: AuthSession = {
+  user: null,
+  active_membership: null,
 };
 
 const AUTH_ROUTE_MAP: Record<
@@ -182,6 +188,10 @@ async function handleMappedAuthRoute(
     method: routeConfig.method,
     search: request.nextUrl.search,
   };
+
+  if (routeKey === "me" && !(await hasAuthCookies())) {
+    return jsonResponse(EMPTY_SESSION, { status: 200 });
+  }
 
   const authResult = routeConfig.requiresAuth
     ? await fetchBackendWithCookieAuth(routeConfig.backendPath, fetchOptions)
