@@ -62,6 +62,11 @@ const AUTH_ROUTE_MAP: Record<
     method: "POST",
     storesTokens: true,
   },
+  "login/email/verify": {
+    backendPath: "/api/v1/auth/login/email/verify/",
+    method: "POST",
+    storesTokens: true,
+  },
   "login/google/start": {
     backendPath: "/api/v1/auth/login/google/start/",
     method: "GET",

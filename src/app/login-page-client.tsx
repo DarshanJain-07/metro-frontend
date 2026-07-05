@@ -26,6 +26,8 @@ function pendingTitle(pending: AuthPendingState) {
       return "Choose an organization";
     case "email_verification_required":
       return "Verify your email";
+    case "access_approval_required":
+      return "Approval pending";
     default:
       return "Continue sign-in";
   }
@@ -66,6 +68,7 @@ export function LoginPageClient() {
   const [otpCode, setOtpCode] = useState("");
   const [otpSent, setOtpSent] = useState(false);
   const [pendingAuth, setPendingAuth] = useState<AuthPendingState | null>(null);
+  const [emailVerificationCode, setEmailVerificationCode] = useState("");
   const [mfaChallengeId, setMfaChallengeId] = useState<string | null>(null);
   const [mfaCode, setMfaCode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -84,6 +87,7 @@ export function LoginPageClient() {
     selectOrganization,
     startGoogleLogin,
     user,
+    verifyEmail,
     verifyMfa,
     verifyOtp,
   } = useAuth();
@@ -102,6 +106,7 @@ export function LoginPageClient() {
 
     if (result.pending) {
       setPendingAuth(result.pending);
+      setEmailVerificationCode("");
       setMfaChallengeId(null);
       setMfaCode("");
       toast.message(pendingTitle(result.pending));
@@ -217,6 +222,19 @@ export function LoginPageClient() {
     setIsSubmitting(false);
   };
 
+  const handleEmailVerification: React.FormEventHandler<HTMLFormElement> = async (event) => {
+    event.preventDefault();
+    if (!pendingAuth?.pending_authentication_token) return;
+
+    setIsSubmitting(true);
+    const result = await verifyEmail(
+      pendingAuth.pending_authentication_token,
+      emailVerificationCode,
+    );
+    await completeAuthResult(result, "Email verified.");
+    setIsSubmitting(false);
+  };
+
   const handleMfaVerify: React.FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
     if (!pendingAuth?.pending_authentication_token || !mfaChallengeId) return;
@@ -320,9 +338,34 @@ export function LoginPageClient() {
                 )}
 
                 {pendingAuth.type === "email_verification_required" && (
-                  <p className="text-sm text-muted-foreground">
-                    Check your inbox for the verification email, then try signing in again.
-                  </p>
+                  <form onSubmit={handleEmailVerification} className="grid gap-5">
+                    <FormGroup label="Email verification code">
+                      <Input
+                        id="email-verification-code"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        placeholder="Enter code"
+                        value={emailVerificationCode}
+                        onChange={(event) => setEmailVerificationCode(event.target.value)}
+                        required
+                      />
+                    </FormGroup>
+                    <Button className="w-full" type="submit" disabled={isSubmitting}>
+                      {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                      Verify email
+                    </Button>
+                  </form>
+                )}
+
+                {pendingAuth.type === "access_approval_required" && (
+                  <div className="rounded-md border border-border bg-muted/30 p-4 text-sm text-muted-foreground">
+                    <p className="font-medium text-foreground">
+                      {pendingAuth.company_name || "Your organization"} will appear here after approval.
+                    </p>
+                    <p className="mt-2">
+                      Your sign-in is complete, but an admin still needs to approve your role and permissions.
+                    </p>
+                  </div>
                 )}
 
                 <Button
@@ -332,11 +375,12 @@ export function LoginPageClient() {
                   disabled={isSubmitting}
                   onClick={() => {
                     setPendingAuth(null);
+                    setEmailVerificationCode("");
                     setMfaChallengeId(null);
                     setMfaCode("");
                   }}
                 >
-                  Back to sign-in
+                  {pendingAuth.type === "access_approval_required" ? "Use another account" : "Back to sign-in"}
                 </Button>
               </div>
             ) : (

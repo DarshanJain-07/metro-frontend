@@ -55,6 +55,9 @@ export interface AuthPendingState {
   authentication_factors?: AuthFactor[];
   organizations?: AuthOrganizationOption[];
   email?: string;
+  email_verification_id?: string;
+  company_name?: string;
+  signup_request_id?: string;
 }
 
 export interface AuthSession {

@@ -60,6 +60,10 @@ interface AuthContextType {
     identifier: string,
   ) => Promise<{ ok: boolean; error: string | null }>;
   verifyOtp: (identifier: string, code: string) => Promise<AuthResult>;
+  verifyEmail: (
+    pendingAuthenticationToken: string,
+    code: string,
+  ) => Promise<AuthResult>;
   startGoogleLogin: (redirectUrl: string) => Promise<{ error: string | null }>;
   exchangeGoogleLogin: (exchangeCode: string) => Promise<AuthResult>;
   exchangeGoogleCode: (code: string, state: string) => Promise<AuthResult>;
@@ -117,6 +121,7 @@ const AuthActionsContext = createContext<
       | "loginWithPassword"
       | "requestOtp"
       | "verifyOtp"
+      | "verifyEmail"
       | "startGoogleLogin"
       | "exchangeGoogleLogin"
       | "exchangeGoogleCode"
@@ -408,6 +413,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [postAuthRequest],
   );
 
+  const verifyEmail = useCallback(
+    (pendingAuthenticationToken: string, code: string) => {
+      return postAuthRequest(
+        "/login/email/verify",
+        {
+          pending_authentication_token: pendingAuthenticationToken,
+          code,
+        },
+        "Could not verify your email code.",
+      );
+    },
+    [postAuthRequest],
+  );
+
   const startGoogleLogin = useCallback(
     async (redirectUrl: string) => {
       setIsAuthActionLoading(true);
@@ -689,6 +708,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithPassword,
       requestOtp,
       verifyOtp,
+      verifyEmail,
       startGoogleLogin,
       exchangeGoogleLogin,
       exchangeGoogleCode,
@@ -713,6 +733,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithPassword,
       requestOtp,
       verifyOtp,
+      verifyEmail,
       startGoogleLogin,
       exchangeGoogleLogin,
       exchangeGoogleCode,
@@ -761,6 +782,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithPassword,
       requestOtp,
       verifyOtp,
+      verifyEmail,
       startGoogleLogin,
       exchangeGoogleLogin,
       exchangeGoogleCode,
@@ -775,6 +797,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       loginWithPassword,
       requestOtp,
       verifyOtp,
+      verifyEmail,
       startGoogleLogin,
       exchangeGoogleLogin,
       exchangeGoogleCode,

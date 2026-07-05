@@ -15,6 +15,7 @@ import { readApiError } from "@/lib/api";
 
 export default function SignupPage() {
   const [name, setName] = useState("");
+  const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
   const [company, setCompany] = useState("");
   const [phone, setPhone] = useState("");
@@ -37,6 +38,7 @@ export default function SignupPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
         full_name: name,
+        username,
         email,
         company_name: company,
         phone,
@@ -96,6 +98,17 @@ export default function SignupPage() {
                   placeholder="name@company.com"
                   value={email}
                   onChange={(event) => setEmail(event.target.value)}
+                  required
+                />
+              </FormGroup>
+
+              <FormGroup label="Username">
+                <Input
+                  id="signup-username"
+                  autoComplete="username"
+                  placeholder="Choose a username"
+                  value={username}
+                  onChange={(event) => setUsername(event.target.value)}
                   required
                 />
               </FormGroup>
