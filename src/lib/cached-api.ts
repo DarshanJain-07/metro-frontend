@@ -1,7 +1,7 @@
 import { cacheLife, cacheTag } from "next/cache";
 import { z } from "zod";
 
-import { API_URL } from "@/lib/api";
+import { getBackendUrl } from "@/lib/server-auth";
 
 const CitySchema = z.object({
   id: z.string(),
@@ -48,7 +48,7 @@ export async function getCachedCities(companyId?: string): Promise<City[]> {
     cacheTag("cities");
   }
 
-  const response = await fetch(`${API_URL}/api/v1/master/cities/`, {
+  const response = await fetch(getBackendUrl("/api/v1/master/cities/"), {
     headers: createCompanyHeaders(companyId),
   });
 
@@ -67,7 +67,7 @@ export async function getCachedDashboardStats(companyId: string) {
   cacheLife("dashboard");
   cacheTag("dashboard", `dashboard-${companyId}`);
 
-  const url = new URL(`${API_URL}/api/v1/dashboard/`);
+  const url = getBackendUrl("/api/v1/dashboard/");
   url.searchParams.set("company_id", companyId);
 
   const response = await fetch(url, {

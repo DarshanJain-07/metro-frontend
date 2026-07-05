@@ -17,9 +17,7 @@ import {
   normalizeAuthRedirect,
 } from "@/lib/auth-redirect";
 
-const APP_SESSION_IDLE_TIMEOUT_MINUTES = Number(
-  process.env.NEXT_PUBLIC_APP_SESSION_IDLE_TIMEOUT_MINUTES || "15",
-);
+const APP_SESSION_IDLE_TIMEOUT_MINUTES = 15;
 
 export function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();

@@ -338,7 +338,7 @@ async function handleAuthRequest(
 
     const message =
       error instanceof Error &&
-      error.message === "API_URL or NEXT_PUBLIC_API_URL is not defined"
+      error.message === "BACKEND_URL is not defined"
         ? "Backend API URL is not configured for this deployment."
         : "Could not reach the backend service.";
 

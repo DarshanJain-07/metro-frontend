@@ -1,13 +1,3 @@
-const envApiUrl = process.env.NEXT_PUBLIC_API_URL || process.env.API_URL;
-
-if (!envApiUrl) {
-  throw new Error("NEXT_PUBLIC_API_URL is not defined");
-}
-
-const API_URL: string = envApiUrl;
-
-export { API_URL };
-
 type ApiErrorPayload = {
   [key: string]: ApiErrorValue | undefined;
 };
@@ -182,13 +172,7 @@ export function resolveBackendProxyPath(path: string) {
   }
 
   if (isAbsoluteUrl(path)) {
-    const backendUrl = new URL(API_URL);
     const url = new URL(path);
-
-    if (url.origin !== backendUrl.origin) {
-      throw new Error("Only configured backend URLs can be proxied.");
-    }
-
     return `/api/backend${removeTrailingSlash(url.pathname)}${url.search}`;
   }
 

@@ -11,10 +11,40 @@ function appendTrailingSlash(path: string) {
   return path.endsWith("/") ? path : `${path}/`;
 }
 
+function isAllowedBackendPath(path: string) {
+  if (!path.startsWith("/api/v1/") && path !== "/api/v1") {
+    return false;
+  }
+
+  if (path.includes("\\") || path.startsWith("//")) {
+    return false;
+  }
+
+  try {
+    const decodedPath = decodeURIComponent(path);
+    return (
+      decodedPath === path &&
+      !decodedPath.includes("\\") &&
+      !decodedPath.startsWith("//") &&
+      !/^\/https?:/i.test(decodedPath)
+    );
+  } catch {
+    return false;
+  }
+}
+
 async function proxyBackendRequest(request: NextRequest) {
   const backendPath = appendTrailingSlash(
     request.nextUrl.pathname.replace(/^\/api\/backend(?=\/|$)/, ""),
   );
+
+  if (!isAllowedBackendPath(backendPath)) {
+    return NextResponse.json(
+      { detail: "Invalid backend proxy path." },
+      { status: 400 },
+    );
+  }
+
   const method = request.method.toUpperCase();
   const body =
     method === "GET" || method === "HEAD"
