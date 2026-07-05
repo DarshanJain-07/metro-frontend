@@ -67,15 +67,6 @@ const AUTH_ROUTE_MAP: Record<
     method: "POST",
     storesTokens: true,
   },
-  "login/google/start": {
-    backendPath: "/api/v1/auth/login/google/start/",
-    method: "GET",
-  },
-  "login/google/exchange": {
-    backendPath: "/api/v1/auth/login/google/exchange/",
-    method: "POST",
-    storesTokens: true,
-  },
   "login/mfa/challenge": {
     backendPath: "/api/v1/auth/login/mfa/challenge/",
     method: "POST",

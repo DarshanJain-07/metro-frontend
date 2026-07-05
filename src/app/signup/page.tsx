@@ -7,19 +7,37 @@ import { CheckCircle2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
-import { Textarea } from "@/components/ui/textarea";
 import { FormGroup } from "@/components/ui/form-elements";
 import { PageHeader } from "@/components/page-header";
 import { Surface } from "@/components/ui/surface";
 import { readApiError } from "@/lib/api";
 
+const PASSWORD_REQUIREMENT_MESSAGE =
+  "Password must be at least 10 characters and include 1 uppercase letter, 1 lowercase letter, 1 number, and 1 special character.";
+
+function getPasswordError(value: string) {
+  if (
+    value.length < 10 ||
+    !/[A-Z]/.test(value) ||
+    !/[a-z]/.test(value) ||
+    !/\d/.test(value) ||
+    !/[^A-Za-z0-9\s]/.test(value)
+  ) {
+    return PASSWORD_REQUIREMENT_MESSAGE;
+  }
+  return null;
+}
+
+function normalizePhone(value: string) {
+  return value.replace(/\D/g, "").slice(0, 10);
+}
+
 export default function SignupPage() {
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
   const [email, setEmail] = useState("");
-  const [company, setCompany] = useState("");
+  const [organizationId, setOrganizationId] = useState("");
   const [phone, setPhone] = useState("");
-  const [message, setMessage] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -27,6 +45,18 @@ export default function SignupPage() {
 
   const handleSubmit: React.FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
+    const normalizedPhone = normalizePhone(phone);
+    if (!/^\d{10}$/.test(normalizedPhone)) {
+      toast.error("Phone number must be exactly 10 digits.");
+      return;
+    }
+
+    const passwordError = getPasswordError(password);
+    if (passwordError) {
+      toast.error(passwordError);
+      return;
+    }
+
     if (password !== confirmPassword) {
       toast.error("Passwords do not match.");
       return;
@@ -40,9 +70,8 @@ export default function SignupPage() {
         full_name: name,
         username,
         email,
-        company_name: company,
-        phone,
-        message,
+        organization_id: organizationId.trim().toUpperCase(),
+        phone: normalizedPhone,
         password,
       }),
     });
@@ -113,14 +142,14 @@ export default function SignupPage() {
                 />
               </FormGroup>
 
-              <FormGroup label="Company">
+              <FormGroup label="Organization ID">
                 <Input
-                  id="signup-company"
+                  id="signup-organization-id"
                   autoComplete="off"
                   className="focus-visible:ring-1 focus-visible:ring-ring/25"
-                  placeholder="Company name"
-                  value={company}
-                  onChange={(event) => setCompany(event.target.value)}
+                  placeholder="Company provided ID"
+                  value={organizationId}
+                  onChange={(event) => setOrganizationId(event.target.value.toUpperCase())}
                   required
                 />
               </FormGroup>
@@ -130,9 +159,13 @@ export default function SignupPage() {
                   id="signup-phone"
                   type="tel"
                   autoComplete="tel"
+                  inputMode="numeric"
+                  maxLength={10}
+                  pattern="[0-9]{10}"
                   placeholder="Contact number"
                   value={phone}
-                  onChange={(event) => setPhone(event.target.value)}
+                  onChange={(event) => setPhone(normalizePhone(event.target.value))}
+                  required
                 />
               </FormGroup>
 
@@ -143,6 +176,7 @@ export default function SignupPage() {
                   placeholder="Create a password"
                   value={password}
                   onChange={(event) => setPassword(event.target.value)}
+                  minLength={10}
                   required
                 />
               </FormGroup>
@@ -155,15 +189,6 @@ export default function SignupPage() {
                   value={confirmPassword}
                   onChange={(event) => setConfirmPassword(event.target.value)}
                   required
-                />
-              </FormGroup>
-
-              <FormGroup label="Message">
-                <Textarea
-                  id="signup-message"
-                  placeholder="Tell us what access you need"
-                  value={message}
-                  onChange={(event) => setMessage(event.target.value)}
                 />
               </FormGroup>
 

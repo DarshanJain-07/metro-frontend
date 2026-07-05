@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import Link from "next/link";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Building2, Loader2, ShieldCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -33,34 +33,6 @@ function pendingTitle(pending: AuthPendingState) {
   }
 }
 
-function GoogleIcon({ className }: { className?: string }) {
-  return (
-    <svg
-      aria-hidden="true"
-      viewBox="0 0 24 24"
-      className={className}
-      focusable="false"
-    >
-      <path
-        fill="#4285F4"
-        d="M23.49 12.27c0-.79-.07-1.54-.19-2.27H12v4.51h6.47a5.53 5.53 0 0 1-2.4 3.63v2.95h3.89c2.27-2.09 3.53-5.17 3.53-8.82Z"
-      />
-      <path
-        fill="#34A853"
-        d="M12 24c3.24 0 5.96-1.07 7.95-2.91l-3.89-2.95c-1.08.72-2.46 1.15-4.06 1.15-3.12 0-5.76-2.11-6.71-4.94H1.28v3.04A12 12 0 0 0 12 24Z"
-      />
-      <path
-        fill="#FBBC05"
-        d="M5.29 14.35A7.2 7.2 0 0 1 4.91 12c0-.82.14-1.61.38-2.35V6.61H1.28A12 12 0 0 0 0 12c0 1.94.46 3.78 1.28 5.39l4.01-3.04Z"
-      />
-      <path
-        fill="#EA4335"
-        d="M12 4.71c1.76 0 3.35.61 4.6 1.8l3.44-3.44A11.56 11.56 0 0 0 12 0 12 12 0 0 0 1.28 6.61l4.01 3.04C6.24 6.82 8.88 4.71 12 4.71Z"
-      />
-    </svg>
-  );
-}
-
 export function LoginPageClient() {
   const [mode, setMode] = useState<LoginMode>("password");
   const [identifier, setIdentifier] = useState("");
@@ -73,19 +45,13 @@ export function LoginPageClient() {
   const [mfaCode, setMfaCode] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitInFlightRef = useRef(false);
-  const exchangeHandledRef = useRef(false);
-  const authErrorHandledRef = useRef(false);
   const router = useRouter();
-  const searchParams = useSearchParams();
   const redirectTarget = useAuthRedirectTarget();
   const {
     challengeMfa,
-    exchangeGoogleCode,
-    exchangeGoogleLogin,
     loginWithPassword,
     requestOtp,
     selectOrganization,
-    startGoogleLogin,
     user,
     verifyEmail,
     verifyMfa,
@@ -123,30 +89,6 @@ export function LoginPageClient() {
       redirectAfterAuth(redirectTarget);
     }
   }, [redirectAfterAuth, redirectTarget, user]);
-
-  useEffect(() => {
-    const authError = searchParams.get("auth_error");
-    if (authError && !authErrorHandledRef.current) {
-      authErrorHandledRef.current = true;
-      toast.error("Could not complete Google sign-in.");
-    }
-  }, [searchParams]);
-
-  useEffect(() => {
-    const code = searchParams.get("code");
-    const state = searchParams.get("state");
-    const exchangeCode = searchParams.get("workos_exchange_code");
-    if ((!exchangeCode && (!code || !state)) || exchangeHandledRef.current) return;
-
-    exchangeHandledRef.current = true;
-    setIsSubmitting(true);
-    const exchange = exchangeCode
-      ? exchangeGoogleLogin(exchangeCode)
-      : exchangeGoogleCode(code as string, state as string);
-    exchange
-      .then((result) => completeAuthResult(result, "Signed in with Google."))
-      .finally(() => setIsSubmitting(false));
-  }, [completeAuthResult, exchangeGoogleCode, exchangeGoogleLogin, searchParams]);
 
   const handlePasswordSubmit: React.FormEventHandler<HTMLFormElement> = async (event) => {
     event.preventDefault();
@@ -189,21 +131,6 @@ export function LoginPageClient() {
     try {
       const result = await verifyOtp(identifier, otpCode);
       await completeAuthResult(result, "Signed in successfully.");
-    } finally {
-      submitInFlightRef.current = false;
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleGoogle = async () => {
-    if (submitInFlightRef.current) return;
-    submitInFlightRef.current = true;
-    setIsSubmitting(true);
-    try {
-      const result = await startGoogleLogin(redirectTarget);
-      if (result.error) {
-        toast.error(result.error);
-      }
     } finally {
       submitInFlightRef.current = false;
       setIsSubmitting(false);
@@ -483,23 +410,6 @@ export function LoginPageClient() {
                     </div>
                   </div>
                 )}
-
-                <div className="relative flex items-center">
-                  <div className="h-px flex-1 bg-border" />
-                  <span className="px-3 text-xs uppercase tracking-wider text-muted-foreground">or</span>
-                  <div className="h-px flex-1 bg-border" />
-                </div>
-
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full"
-                  disabled={isSubmitting}
-                  onClick={handleGoogle}
-                >
-                  <GoogleIcon className="mr-2 h-4 w-4" />
-                  Continue with Google
-                </Button>
 
                 <p className="text-center text-xs text-muted-foreground">
                   Haven&apos;t registered yet?{" "}

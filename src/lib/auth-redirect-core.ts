@@ -3,7 +3,7 @@ export const LAST_AUTH_REDIRECT_STORAGE_KEY = "metro:last-auth-redirect";
 
 const AUTH_REDIRECT_PARAMS = ["redirect_url"] as const;
 
-const AUTH_PATHS = new Set(["/", "/sign-in", "/signup", "/auth/callback"]);
+const AUTH_PATHS = new Set(["/", "/sign-in", "/signup"]);
 
 type SearchParamsLike = Pick<URLSearchParams, "get" | "has">;
 type StringifiableSearchParams = Pick<URLSearchParams, "toString">;
@@ -48,8 +48,7 @@ export function isAuthRoute(pathname: string): boolean {
 
   return (
     path.startsWith("/sign-in/") ||
-    path.startsWith("/signup/") ||
-    path.startsWith("/auth/callback/")
+    path.startsWith("/signup/")
   );
 }
 

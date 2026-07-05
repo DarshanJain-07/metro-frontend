@@ -19,7 +19,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { toast } from "sonner";
-import { LayoutTemplate } from "lucide-react";
+import { Copy, LayoutTemplate } from "lucide-react";
 import { MatrixPermissionsEditor, Permission, PermissionState } from "./_components/matrix-permissions-editor";
 import { RoleTemplatesManager } from "./_components/role-templates-manager";
 
@@ -70,7 +70,7 @@ interface SignupRequest {
   email: string;
   phone: string;
   company_name: string;
-  message: string;
+  organization_id: string;
   status: "PENDING" | "APPROVED" | "REJECTED";
   created_at: string;
 }
@@ -274,6 +274,17 @@ export default function UsersPage() {
     void queryClient.invalidateQueries({ queryKey: [...adminKeys.all, "signup-requests"] });
   }
 
+  async function handleCopySignupCode() {
+    const code = activeMembership?.company_signup_code;
+    if (!code) return;
+    try {
+      await navigator.clipboard.writeText(code);
+      toast.success("Organization ID copied.");
+    } catch {
+      toast.error("Could not copy organization ID.");
+    }
+  }
+
   async function handleToggle(code: string, enabled: boolean) {
     if (!role || role === METRO_ROLE) return;
     
@@ -372,6 +383,21 @@ export default function UsersPage() {
   return (
     <PageContainer maxWidth="full">
       <div className="flex-1 h-full flex flex-col overflow-hidden">
+        {canApproveSignups && activeMembership?.company_signup_code && (
+          <Surface className="mb-4 shrink-0" padding="md">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">Organization ID</h2>
+                <p className="mt-1 font-mono text-sm text-foreground">{activeMembership.company_signup_code}</p>
+              </div>
+              <Button size="sm" variant="outline" onClick={handleCopySignupCode}>
+                <Copy className="mr-2 h-4 w-4" />
+                Copy
+              </Button>
+            </div>
+          </Surface>
+        )}
+
         {canApproveSignups && signupRequests.length > 0 && (
           <Surface className="mb-4 shrink-0" padding="md">
             <div className="mb-3 flex items-center justify-between gap-3">
@@ -398,7 +424,6 @@ export default function UsersPage() {
                         <span className="truncate">{request.email}</span>
                         <span className="truncate">{request.company_name}</span>
                         {request.phone && <span className="truncate">{request.phone}</span>}
-                        {request.message && <span className="truncate">{request.message}</span>}
                       </div>
                     </div>
 

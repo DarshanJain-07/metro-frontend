@@ -11,6 +11,7 @@ export interface Membership {
   id: string;
   company: number;
   company_name: string;
+  company_signup_code: string;
   branch: string | null;
   branch_name: string | null;
   role: Role;

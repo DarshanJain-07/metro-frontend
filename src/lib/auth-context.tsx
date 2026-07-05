@@ -64,9 +64,6 @@ interface AuthContextType {
     pendingAuthenticationToken: string,
     code: string,
   ) => Promise<AuthResult>;
-  startGoogleLogin: (redirectUrl: string) => Promise<{ error: string | null }>;
-  exchangeGoogleLogin: (exchangeCode: string) => Promise<AuthResult>;
-  exchangeGoogleCode: (code: string, state: string) => Promise<AuthResult>;
   challengeMfa: (authenticationFactorId: string) => Promise<{
     authenticationChallengeId: string | null;
     error: string | null;
@@ -122,9 +119,6 @@ const AuthActionsContext = createContext<
       | "requestOtp"
       | "verifyOtp"
       | "verifyEmail"
-      | "startGoogleLogin"
-      | "exchangeGoogleLogin"
-      | "exchangeGoogleCode"
       | "challengeMfa"
       | "verifyMfa"
       | "selectOrganization"
@@ -427,72 +421,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [postAuthRequest],
   );
 
-  const startGoogleLogin = useCallback(
-    async (redirectUrl: string) => {
-      setIsAuthActionLoading(true);
-      setAuthError(null);
-
-      try {
-        const params = new URLSearchParams({ redirect_url: redirectUrl });
-        const response = await fetch(
-          `/api/auth/login/google/start?${params.toString()}`,
-          {
-            credentials: "same-origin",
-          },
-        );
-        if (!response.ok) {
-          const message = await readApiError(
-            response,
-            "Could not start Google sign-in.",
-          );
-          setAuthError(message);
-          return { error: message };
-        }
-
-        const payload = (await response.json()) as {
-          authorization_url?: string;
-        };
-        if (!payload.authorization_url) {
-          const message = "Could not start Google sign-in.";
-          setAuthError(message);
-          return { error: message };
-        }
-
-        window.location.assign(payload.authorization_url);
-        return { error: null };
-      } catch {
-        const message = "Could not reach the app backend.";
-        setAuthError(message);
-        return { error: message };
-      } finally {
-        setIsAuthActionLoading(false);
-      }
-    },
-    [setAuthError],
-  );
-
-  const exchangeGoogleLogin = useCallback(
-    (exchangeCode: string) => {
-      return postAuthRequest(
-        "/login/google/exchange",
-        { exchange_code: exchangeCode },
-        "Could not complete Google sign-in.",
-      );
-    },
-    [postAuthRequest],
-  );
-
-  const exchangeGoogleCode = useCallback(
-    (code: string, state: string) => {
-      return postAuthRequest(
-        "/login/google/exchange",
-        { code, state },
-        "Could not complete Google sign-in.",
-      );
-    },
-    [postAuthRequest],
-  );
-
   const challengeMfa = useCallback(
     async (authenticationFactorId: string) => {
       setIsAuthActionLoading(true);
@@ -709,9 +637,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       requestOtp,
       verifyOtp,
       verifyEmail,
-      startGoogleLogin,
-      exchangeGoogleLogin,
-      exchangeGoogleCode,
       challengeMfa,
       verifyMfa,
       selectOrganization,
@@ -734,9 +659,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       requestOtp,
       verifyOtp,
       verifyEmail,
-      startGoogleLogin,
-      exchangeGoogleLogin,
-      exchangeGoogleCode,
       challengeMfa,
       verifyMfa,
       selectOrganization,
@@ -783,9 +705,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       requestOtp,
       verifyOtp,
       verifyEmail,
-      startGoogleLogin,
-      exchangeGoogleLogin,
-      exchangeGoogleCode,
       challengeMfa,
       verifyMfa,
       selectOrganization,
@@ -798,9 +717,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       requestOtp,
       verifyOtp,
       verifyEmail,
-      startGoogleLogin,
-      exchangeGoogleLogin,
-      exchangeGoogleCode,
       challengeMfa,
       verifyMfa,
       selectOrganization,
