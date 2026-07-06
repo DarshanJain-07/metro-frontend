@@ -1,7 +1,6 @@
 "use client";
 
 import {
-  isValidElement,
   useCallback,
   useState,
   useEffect,
@@ -63,7 +62,6 @@ export interface FormFieldDef {
   required?: boolean;
 }
 
-type ImportRow = Record<string, string | number | boolean | null>;
 type OptionSource = Partial<
   Record<"id" | "value" | "name" | "label" | "title", string | number | null>
 >;
@@ -84,7 +82,7 @@ interface MasterTableProps<T> {
   onRowClick?: (row: T) => void;
 }
 
-type ExportFormat = "csv" | "xls";
+type ExportFormat = "csv" | "xlsx";
 
 const DUPLICATE_IMPORT_ERROR_PATTERN =
   /\b(duplicate|already exists|already exist|unique|must be unique|conflicts with existing)\b/i;
@@ -93,38 +91,6 @@ const formatImportErrorMessage = (message: string, title: string) => {
   if (!DUPLICATE_IMPORT_ERROR_PATTERN.test(message)) return message;
   return `Duplicate entry found in ${title.toLowerCase()}: ${message}`;
 };
-
-const formatExportValue = (value: unknown): string => {
-  if (value === null || value === undefined) return "";
-  if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (value instanceof Date) return value.toISOString();
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-};
-
-const reactNodeToText = (node: ReactNode): string => {
-  if (node === null || node === undefined || typeof node === "boolean") return "";
-  if (typeof node === "string" || typeof node === "number" || typeof node === "bigint") {
-    return String(node);
-  }
-  if (Array.isArray(node)) return node.map(reactNodeToText).join(" ").trim();
-  if (isValidElement<{ children?: ReactNode }>(node)) {
-    return reactNodeToText(node.props.children);
-  }
-  return "";
-};
-
-const escapeCsvCell = (value: string) => {
-  if (!/[",\r\n]/.test(value)) return value;
-  return `"${value.replace(/"/g, '""')}"`;
-};
-
-const escapeHtmlCell = (value: string) =>
-  value
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 
 const makeExportFileName = (title: string, extension: ExportFormat) => {
   const baseName = title
@@ -135,6 +101,9 @@ const makeExportFileName = (title: string, extension: ExportFormat) => {
   const date = new Date().toISOString().slice(0, 10);
   return `${baseName || "export"}-${date}.${extension}`;
 };
+
+const appendResourceAction = (apiPath: string, action: string) =>
+  `${apiPath.endsWith("/") ? apiPath : `${apiPath}/`}${action}/`;
 
 export function MasterTable<T extends { id: string; updated_at?: string | null }>({
   title,
@@ -342,10 +311,14 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
   });
 
   const importMutation = useMutation({
-    mutationFn: async (importData: ImportRow[]) => {
-      const res = await fetchWithAuth(`${baseApiPath}import-rows/`, {
+    mutationFn: async ({ file, format }: { file: File; format: ExportFormat }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("format", format);
+
+      const res = await fetchWithAuth(appendResourceAction(baseApiPath, "import-file"), {
         method: "POST",
-        body: JSON.stringify({ rows: importData }),
+        body: formData,
       });
 
       if (res.status === 401) {
@@ -357,13 +330,18 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
         throw new Error(formatImportErrorMessage(message, title));
       }
 
-      return {
-        created: await res.json().catch(() => []),
-        importData,
-      };
+      return (await res.json().catch(() => null)) as {
+        total_rows?: number;
+        totals?: Record<string, number>;
+      } | null;
     },
-    onSuccess: ({ created, importData }) => {
-      const count = Array.isArray(created) ? created.length : importData.length;
+    onSuccess: (result) => {
+      const count =
+        (result?.totals?.new || 0) +
+        (result?.totals?.update || 0) +
+        (result?.totals?.skip || 0) ||
+        result?.total_rows ||
+        0;
       toast.success(`Successfully imported ${count} items`);
       invalidateMasterData();
     },
@@ -407,57 +385,27 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
     });
   };
 
-  const handleImport = async (importData: ImportRow[]) => {
-    await importMutation.mutateAsync(importData).catch(() => undefined);
+  const handleImport = async (file: File, format: ExportFormat) => {
+    await importMutation.mutateAsync({ file, format }).catch(() => undefined);
   };
 
-  const getExportRows = useCallback(() => {
-    return data.map((row: T, rowIndex: number) =>
-      columns.map((column) => {
-        const value = column.accessorKey ? row[column.accessorKey] : undefined;
-        if (column.render) {
-          const rendered = column.render(value, row, rowIndex);
-          const text = reactNodeToText(rendered);
-          if (text) return text;
-        }
-        return formatExportValue(value);
-      }),
-    );
-  }, [columns, data]);
-
   const handleExport = useCallback(
-    (format: ExportFormat) => {
-      const headers = columns.map((column) => column.header);
-      const rows = getExportRows();
+    async (format: ExportFormat) => {
+      const exportQuery = new URLSearchParams(queryString);
+      exportQuery.set("format", format);
+      const res = await fetchWithAuth(`${appendResourceAction(baseApiPath, "export")}?${exportQuery.toString()}`);
 
-      if (rows.length === 0) {
-        toast.error(`No ${title.toLowerCase()} data to export.`);
+      if (res.status === 401) {
+        toast.error("Authentication session expired.");
         return;
       }
 
-      const content =
-        format === "csv"
-          ? "\uFEFF" +
-            [headers, ...rows]
-              .map((row) => row.map((cell) => escapeCsvCell(cell)).join(","))
-              .join("\r\n")
-          : `<!doctype html><html><head><meta charset="utf-8" /></head><body><table><thead><tr>${headers
-              .map((header) => `<th>${escapeHtmlCell(header)}</th>`)
-              .join("")}</tr></thead><tbody>${rows
-              .map(
-                (row) =>
-                  `<tr>${row
-                    .map((cell) => `<td>${escapeHtmlCell(cell)}</td>`)
-                    .join("")}</tr>`,
-              )
-              .join("")}</tbody></table></body></html>`;
+      if (!res.ok) {
+        toast.error(await readApiError(res, `Could not export ${title.toLowerCase()}.`));
+        return;
+      }
 
-      const blob = new Blob([content], {
-        type:
-          format === "csv"
-            ? "text/csv;charset=utf-8"
-            : "application/vnd.ms-excel;charset=utf-8",
-      });
+      const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
@@ -466,9 +414,9 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
       link.click();
       link.remove();
       URL.revokeObjectURL(url);
-      toast.success(`Exported ${rows.length} ${title.toLowerCase()} row${rows.length === 1 ? "" : "s"}.`);
+      toast.success(`Exported ${title.toLowerCase()}.`);
     },
-    [columns, getExportRows, title],
+    [baseApiPath, queryString, title],
   );
 
   return (
@@ -508,9 +456,9 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
                     <FileSpreadsheet className="h-4 w-4" />
                     CSV
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => handleExport("xls")}>
+                  <DropdownMenuItem onSelect={() => handleExport("xlsx")}>
                     <FileSpreadsheet className="h-4 w-4" />
-                    XLS
+                    XLSX
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
@@ -547,8 +495,6 @@ export function MasterTable<T extends { id: string; updated_at?: string | null }
         isOpen={isImportOpen}
         onOpenChange={setIsImportOpen}
         title={title}
-        formFields={formFields}
-        dynamicOptions={dynamicOptions}
         onImport={handleImport}
       />
 

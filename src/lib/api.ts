@@ -188,7 +188,8 @@ export async function fetchWithAuth(path: string, options: RequestInit = {}) {
     !headers.has("Content-Type") &&
     options.method &&
     !["GET", "HEAD", "DELETE"].includes(options.method.toUpperCase()) &&
-    options.body
+    options.body &&
+    !(options.body instanceof FormData)
   ) {
     headers.set("Content-Type", "application/json");
   }
