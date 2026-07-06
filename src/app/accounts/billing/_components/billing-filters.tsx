@@ -97,6 +97,12 @@ export function BillingFilters() {
           <ImportExportActions
             title="Invoices"
             apiPath="/api/v1/accounts/invoices/"
+            queryParams={{
+              customer_id: customerId,
+              from_date: searchParams.get("from_date"),
+              to_date: searchParams.get("to_date"),
+              office: activeMembership?.branch,
+            }}
             canImport={can("invoice:create")}
             onImported={() => {
               void queryClient.invalidateQueries({ queryKey: billingKeys.all });
