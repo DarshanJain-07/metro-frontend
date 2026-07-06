@@ -78,7 +78,7 @@ export function Navbar() {
         )}
       </div>
 
-      <div className="ml-auto flex items-center gap-4 md:gap-6">
+      <div className="ml-auto flex items-center gap-1 md:gap-2">
         <ThemeToggle />
         {user ? (
           <DropdownMenu>
