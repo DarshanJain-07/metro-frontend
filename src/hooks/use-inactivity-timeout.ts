@@ -132,11 +132,13 @@ export function useInactivityTimeout({
     safeRemoveStorage(AUTH_EXPIRED_KEY);
 
     const storedActivity = safeGetStorageNumber(LAST_ACTIVITY_KEY);
+    const timeoutMs = timeoutMinutes * 60 * 1000;
+    const isStoredActivityFresh = storedActivity && now - storedActivity < timeoutMs;
 
-    lastActivityRef.current = storedActivity ?? now;
+    lastActivityRef.current = isStoredActivityFresh ? storedActivity : now;
     hasTriggeredRef.current = false;
 
-    if (!storedActivity) {
+    if (!isStoredActivityFresh) {
       safeSetStorage(LAST_ACTIVITY_KEY, String(now));
     }
 

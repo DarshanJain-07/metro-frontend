@@ -59,6 +59,11 @@ export function LoginPageClient() {
   } = useAuth();
 
   const redirectAfterAuth = useCallback((target: string) => {
+    if (typeof window !== "undefined") {
+      window.location.replace(target);
+      return;
+    }
+
     router.replace(target);
     router.refresh();
   }, [router]);

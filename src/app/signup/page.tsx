@@ -32,6 +32,14 @@ function normalizePhone(value: string) {
   return value.replace(/\D/g, "").slice(0, 10);
 }
 
+type SignupPendingState = {
+  type?: string;
+  detail?: string;
+  email?: string;
+  company_name?: string;
+  signup_request_id?: string;
+};
+
 export default function SignupPage() {
   const [name, setName] = useState("");
   const [username, setUsername] = useState("");
@@ -40,6 +48,8 @@ export default function SignupPage() {
   const [phone, setPhone] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [verificationCode, setVerificationCode] = useState("");
+  const [pendingSignup, setPendingSignup] = useState<SignupPendingState | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isSubmitted, setIsSubmitted] = useState(false);
 
@@ -82,8 +92,42 @@ export default function SignupPage() {
       return;
     }
 
+    const payload = await response.json().catch(() => null) as SignupPendingState | null;
+
+    if (payload?.type === "signup_email_verification_required") {
+      setPendingSignup(payload);
+      setVerificationCode("");
+      toast.success("Verification code sent.");
+      return;
+    }
+
     setIsSubmitted(true);
     toast.success("Account created. Approval is pending.");
+  };
+
+  const handleVerifyEmail: React.FormEventHandler<HTMLFormElement> = async (event) => {
+    event.preventDefault();
+    if (!pendingSignup?.signup_request_id) return;
+
+    setIsSubmitting(true);
+    const response = await fetch(
+      `/api/backend/api/v1/auth/signup-requests/${pendingSignup.signup_request_id}/verify-email/`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: verificationCode }),
+      },
+    );
+    setIsSubmitting(false);
+
+    if (!response.ok) {
+      toast.error(await readApiError(response, "Could not verify email."));
+      return;
+    }
+
+    setIsSubmitted(true);
+    setPendingSignup(null);
+    toast.success("Email verified. Approval is pending.");
   };
 
   return (
@@ -106,6 +150,32 @@ export default function SignupPage() {
                 <Link href="/sign-in">Go to sign in</Link>
               </Button>
             </div>
+          ) : pendingSignup ? (
+            <form onSubmit={handleVerifyEmail} className="grid gap-5">
+              <div className="space-y-2">
+                <h2 className="text-lg font-semibold text-foreground">Verify email</h2>
+                <p className="text-sm text-muted-foreground">
+                  {pendingSignup.detail || "Enter the verification code sent to your email address."}
+                </p>
+              </div>
+
+              <FormGroup label="Verification code">
+                <Input
+                  id="signup-verification-code"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  placeholder="Enter code"
+                  value={verificationCode}
+                  onChange={(event) => setVerificationCode(event.target.value)}
+                  required
+                />
+              </FormGroup>
+
+              <Button className="w-full" type="submit" disabled={isSubmitting}>
+                {isSubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                Verify email
+              </Button>
+            </form>
           ) : (
             <form onSubmit={handleSubmit} className="grid gap-5">
               <FormGroup label="Full name">

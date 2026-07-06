@@ -93,6 +93,8 @@ const EMPTY_SESSION: AuthSession = {
   user: null,
   active_membership: null,
 };
+const LAST_ACTIVITY_KEY = "last_activity";
+const AUTH_EXPIRED_KEY = "auth_expired_at";
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 const SessionContext = createContext<
@@ -236,6 +238,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setSession = useCallback(
     (nextSession: AuthSession) => {
       isSigningOutRef.current = false;
+      if (typeof window !== "undefined" && nextSession.user) {
+        localStorage.setItem(LAST_ACTIVITY_KEY, String(Date.now()));
+        localStorage.removeItem(AUTH_EXPIRED_KEY);
+      }
       setAuthError(null);
       queryClient.setQueryData(authKeys.session(), nextSession);
     },
@@ -244,7 +250,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const clearAuthState = useCallback(() => {
     if (typeof window !== "undefined") {
-      localStorage.removeItem("last_activity");
+      localStorage.removeItem(LAST_ACTIVITY_KEY);
+      localStorage.removeItem(AUTH_EXPIRED_KEY);
       localStorage.removeItem(LAST_AUTH_REDIRECT_STORAGE_KEY);
     }
 
