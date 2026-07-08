@@ -2,7 +2,7 @@
 
 import { useRouter, useSearchParams } from "next/navigation";
 import { useCallback } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Calendar, CreditCard, Clock, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { FormLabel } from "@/components/ui/form-elements";
@@ -16,10 +16,11 @@ import {
 import { formatDateForInput, formatDateForApi } from "@/lib/utils";
 import { DatePicker } from "@/components/ui/date-picker";
 import { PageHeader } from "@/components/page-header";
+import { ImportExportActions } from "@/components/import-export-actions";
 import { getParties } from "../_lib/actions";
 import { Surface } from "@/components/ui/surface";
 import { useAuth } from "@/lib/auth-context";
-import { masterKeys } from "@/lib/query-keys";
+import { billingKeys, masterKeys } from "@/lib/query-keys";
 
 type Party = {
   id: string;
@@ -33,8 +34,9 @@ type PartyOption = {
 
 export function BillingFilters() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const searchParams = useSearchParams();
-  const { activeMembership } = useAuth();
+  const { activeMembership, can } = useAuth();
 
   const customerId = searchParams.get("customer_id") || "";
   const startDate = formatDateForInput(searchParams.get("from_date") || "");
@@ -91,6 +93,22 @@ export function BillingFilters() {
       <PageHeader 
         title="Billing Dashboard"
         description="Automate your customer billing with one-click generation."
+        actions={
+          <ImportExportActions
+            title="Invoices"
+            apiPath="/api/v1/accounts/invoices/"
+            queryParams={{
+              customer_id: customerId,
+              from_date: searchParams.get("from_date"),
+              to_date: searchParams.get("to_date"),
+              office: activeMembership?.branch,
+            }}
+            canImport={can("invoice:create")}
+            onImported={() => {
+              void queryClient.invalidateQueries({ queryKey: billingKeys.all });
+            }}
+          />
+        }
       />
 
       <Surface className="flex flex-wrap items-end gap-x-6 gap-y-4">

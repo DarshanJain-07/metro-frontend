@@ -25,6 +25,7 @@ import {
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { ExpenseEntryDialog } from "./expense-entry-dialog";
+import { ImportExportActions } from "@/components/import-export-actions";
 import { PageHeader } from "@/components/page-header";
 import { Calendar } from "@/components/ui/calendar";
 import { Surface } from "@/components/ui/surface";
@@ -59,7 +60,7 @@ const EMPTY_BRANCH_SUMMARIES: BranchSummary[] = [];
 const EMPTY_EXPENSES: ExpenseItem[] = [];
 
 export function ExpensesDashboard() {
-  const { activeMembership } = useAuth();
+  const { activeMembership, can } = useAuth();
   const queryClient = useQueryClient();
   const [selectedDate, setSelectedDate] = useState<Date | undefined>(new Date());
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
@@ -172,13 +173,27 @@ export function ExpensesDashboard() {
         title="Expenses"
         description="Unified view of branch-wise daily maintenance and office costs."
         actions={
-          <Button 
-            className="h-9 font-medium"
-            onClick={() => setIsEntryDialogOpen(true)}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            New Entry
-          </Button>
+          <div className="flex items-center gap-2">
+            <ImportExportActions
+              title="Expenses"
+              apiPath="/api/v1/accounts/expenses/"
+              queryParams={{
+                date: formattedDate,
+                office: effectiveSelectedBranchId,
+              }}
+              canImport={can("expense:create")}
+              onImported={() => {
+                void queryClient.invalidateQueries({ queryKey: expenseKeys.all });
+              }}
+            />
+            <Button
+              className="h-9 font-medium"
+              onClick={() => setIsEntryDialogOpen(true)}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              New Entry
+            </Button>
+          </div>
         }
       />
 
