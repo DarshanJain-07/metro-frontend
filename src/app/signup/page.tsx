@@ -71,6 +71,10 @@ export default function SignupPage() {
       toast.error("Passwords do not match.");
       return;
     }
+    if (!organizationId.trim()) {
+      toast.error("Organization ID is required.");
+      return;
+    }
 
     setIsSubmitting(true);
     const response = await fetch("/api/backend/api/v1/auth/signup-requests/", {

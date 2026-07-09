@@ -6,7 +6,7 @@ import { Sidebar } from "@/components/sidebar";
 import { useAuth } from "@/lib/auth-context";
 import { useEffect } from "react";
 import { ContentSkeleton } from "@/components/app-skeleton";
-import { getRequiredPermissions } from "@/lib/routes";
+import { getRequiredPermissions, isOwnerOnlyPath } from "@/lib/routes";
 import { useInactivityTimeout } from "@/hooks/use-inactivity-timeout";
 import {
   buildAuthUrl,
@@ -29,6 +29,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   const isAuthPage = isAuthRoute(pathname);
   const isPrintPage = pathname.endsWith("/print") || pathname.includes("/print/");
   const requiredPermissions = getRequiredPermissions(pathname);
+  const ownerOnlyRoute = isOwnerOnlyPath(pathname);
 
   useInactivityTimeout({
     enabled: Boolean(user && !isAuthPage && !isPrintPage),
@@ -94,9 +95,10 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   }
 
   // Check route-level permissions
-  const hasRoutePermission = !isLoading && requiredPermissions
+  const hasRoutePermission = !isLoading && requiredPermissions && requiredPermissions.length > 0
     ? requiredPermissions.some((permission) => can(permission))
     : true;
+  const hasOwnerRoutePermission = !ownerOnlyRoute || !!user?.is_owner;
 
   return (
     <>
@@ -111,7 +113,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
               <div className="p-4 h-full flex items-center justify-center text-center text-muted-foreground font-medium">
                 {authError}
               </div>
-            ) : hasRoutePermission ? (
+            ) : hasRoutePermission && hasOwnerRoutePermission ? (
               children
             ) : (
               <div className="p-4 h-full flex items-center justify-center text-muted-foreground font-medium">
