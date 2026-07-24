@@ -127,6 +127,8 @@ export const expenseKeys = {
 
 export const adminKeys = {
   all: ["admin"] as const,
+  clients: (activeMembershipId: string | null | undefined) =>
+    [...adminKeys.all, "clients", contextKey(activeMembershipId)] as const,
   roles: (activeMembershipId: string | null | undefined) =>
     [...adminKeys.all, "roles", contextKey(activeMembershipId)] as const,
   permissionsCatalog: (activeMembershipId: string | null | undefined) =>

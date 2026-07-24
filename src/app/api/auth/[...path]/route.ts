@@ -1,6 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { AUTH_COOKIE_NAMES } from "@/lib/auth-cookies";
+import {
+  AUTH_COOKIE_NAMES,
+  AUTH_HEADER_NAMES,
+  WORKOS_SESSION_MAX_AGE_SECONDS,
+} from "@/lib/auth-cookies";
 import type { AuthPendingState, AuthSession, User } from "@/lib/auth-types";
 import {
   backendFetch,
@@ -17,10 +21,9 @@ type AuthRouteContext = {
   params: Promise<{ path?: string[] }>;
 };
 
-type TokenResponsePayload = {
-  access?: string;
-  refresh?: string;
+type SessionResponsePayload = {
   user?: User;
+  session_max_age_seconds?: number;
   redirect_url?: string;
 };
 
@@ -35,7 +38,7 @@ const AUTH_ROUTE_MAP: Record<
     backendPath: string;
     method: "GET" | "POST";
     requiresAuth?: boolean;
-    storesTokens?: boolean;
+    storesSession?: boolean;
   }
 > = {
   me: {
@@ -51,7 +54,7 @@ const AUTH_ROUTE_MAP: Record<
   "login/password": {
     backendPath: "/api/v1/auth/login/password/",
     method: "POST",
-    storesTokens: true,
+    storesSession: true,
   },
   "login/otp/start": {
     backendPath: "/api/v1/auth/login/otp/start/",
@@ -60,12 +63,12 @@ const AUTH_ROUTE_MAP: Record<
   "login/otp/verify": {
     backendPath: "/api/v1/auth/login/otp/verify/",
     method: "POST",
-    storesTokens: true,
+    storesSession: true,
   },
   "login/email/verify": {
     backendPath: "/api/v1/auth/login/email/verify/",
     method: "POST",
-    storesTokens: true,
+    storesSession: true,
   },
   "login/mfa/challenge": {
     backendPath: "/api/v1/auth/login/mfa/challenge/",
@@ -74,12 +77,12 @@ const AUTH_ROUTE_MAP: Record<
   "login/mfa/verify": {
     backendPath: "/api/v1/auth/login/mfa/verify/",
     method: "POST",
-    storesTokens: true,
+    storesSession: true,
   },
   "login/organization/select": {
     backendPath: "/api/v1/auth/login/organization/select/",
     method: "POST",
-    storesTokens: true,
+    storesSession: true,
   },
 };
 
@@ -92,7 +95,7 @@ function isPendingAuthPayload(payload: unknown): payload is AuthPendingState {
   return (payload as { status?: unknown }).status === "pending";
 }
 
-function sanitizeTokenPayload(payload: TokenResponsePayload): AuthSession & {
+function sanitizeSessionPayload(payload: SessionResponsePayload): AuthSession & {
   redirect_url?: string | null;
 } {
   const user = payload.user || null;
@@ -109,18 +112,14 @@ async function readJsonPayload(response: Response) {
   return response.json().catch(() => null);
 }
 
-async function revokeRefreshToken(refreshToken: string) {
+async function revokeWorkosSession(session: string) {
   try {
     const response = await backendFetch(
       "/api/v1/auth/logout/",
       {
-        body: JSON.stringify({ refresh: refreshToken }),
-        headers: {
-          "Content-Type": "application/json",
-        },
         method: "POST",
       },
-      null,
+      session,
     );
 
     const payload = (await readJsonPayload(response)) as {
@@ -144,10 +143,10 @@ async function handleLogout(request: NextRequest) {
     return NextResponse.json({ detail: "Method not allowed." }, { status: 405 });
   }
 
-  const refreshToken =
-    request.cookies.get(AUTH_COOKIE_NAMES.refreshToken)?.value || null;
-  const revokeResult = refreshToken
-    ? await revokeRefreshToken(refreshToken)
+  const workosSession =
+    request.cookies.get(AUTH_COOKIE_NAMES.workosSession)?.value || null;
+  const revokeResult = workosSession
+    ? await revokeWorkosSession(workosSession)
     : { ok: true, revoked: false };
 
   const response = NextResponse.json(
@@ -178,8 +177,8 @@ async function handleActiveMembership(request: NextRequest) {
     const response = NextResponse.json(user || { detail: "Unauthorized." }, {
       status: authResult.response.status,
     });
-    if (authResult.refreshedTokens) {
-      setAuthCookies(response, authResult.refreshedTokens);
+    if (authResult.refreshedSession) {
+      setAuthCookies(response, { session: authResult.refreshedSession });
     }
     if (authResult.shouldClearAuth) {
       clearAuthCookies(response);
@@ -202,8 +201,8 @@ async function handleActiveMembership(request: NextRequest) {
     active_membership: membership,
   } satisfies AuthSession);
 
-  if (authResult.refreshedTokens) {
-    setAuthCookies(response, authResult.refreshedTokens);
+  if (authResult.refreshedSession) {
+    setAuthCookies(response, { session: authResult.refreshedSession });
   }
   setActiveMembershipCookies(response, membership);
 
@@ -252,8 +251,8 @@ async function handleMappedAuthRoute(
     const response = jsonResponse(payload || { detail: "Request failed." }, {
       status: authResult.response.status,
     });
-    if ("refreshedTokens" in authResult && authResult.refreshedTokens) {
-      setAuthCookies(response, authResult.refreshedTokens);
+    if ("refreshedSession" in authResult && authResult.refreshedSession) {
+      setAuthCookies(response, { session: authResult.refreshedSession });
     }
     if ("shouldClearAuth" in authResult && authResult.shouldClearAuth) {
       clearAuthCookies(response);
@@ -261,23 +260,27 @@ async function handleMappedAuthRoute(
     return response;
   }
 
-  if (routeConfig.storesTokens) {
-    const tokenPayload = payload as TokenResponsePayload;
-    if (!tokenPayload.access || !tokenPayload.refresh || !tokenPayload.user) {
+  if (routeConfig.storesSession) {
+    const sessionPayload = payload as SessionResponsePayload;
+    const sealedSession = authResult.response.headers.get(
+      AUTH_HEADER_NAMES.refreshedWorkosSession,
+    );
+    if (!sealedSession || !sessionPayload.user) {
       return NextResponse.json(
-        { detail: "Auth response did not include a complete token payload." },
+        { detail: "Auth response did not include a complete session payload." },
         { status: 502 },
       );
     }
 
-    const sanitizedPayload = sanitizeTokenPayload(tokenPayload);
+    const sanitizedPayload = sanitizeSessionPayload(sessionPayload);
     const response = NextResponse.json(sanitizedPayload, {
       status: authResult.response.status,
     });
 
     setAuthCookies(response, {
-      access: tokenPayload.access,
-      refresh: tokenPayload.refresh,
+      session: sealedSession,
+      maxAge:
+        sessionPayload.session_max_age_seconds || WORKOS_SESSION_MAX_AGE_SECONDS,
     });
     setActiveMembershipCookies(response, sanitizedPayload.active_membership);
 
@@ -294,8 +297,8 @@ async function handleMappedAuthRoute(
       active_membership: activeMembership,
     } satisfies AuthSession);
 
-    if ("refreshedTokens" in authResult && authResult.refreshedTokens) {
-      setAuthCookies(response, authResult.refreshedTokens);
+    if ("refreshedSession" in authResult && authResult.refreshedSession) {
+      setAuthCookies(response, { session: authResult.refreshedSession });
     }
     setActiveMembershipCookies(response, activeMembership);
     return response;
