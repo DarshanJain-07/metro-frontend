@@ -9,13 +9,14 @@ import { SidebarSkeleton } from "@/components/app-skeleton";
 
 export function SidebarContent({ onItemClick }: { onItemClick?: () => void }) {
   const pathname = usePathname();
-  const { can } = useAuth();
+  const { can, user } = useAuth();
 
   const filteredGroups = sidebarGroups.map(group => ({
     ...group,
-    items: group.items.filter(item =>
-      item.permissions.some((permission) => can(permission)),
-    )
+    items: group.items.filter((item) => {
+      if (item.ownerOnly) return !!user?.is_owner;
+      return item.permissions.some((permission) => can(permission));
+    })
   })).filter(group => group.items.length > 0);
 
   const allItems = filteredGroups.flatMap(g => g.items);

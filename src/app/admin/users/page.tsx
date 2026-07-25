@@ -71,7 +71,7 @@ interface SignupRequest {
   phone: string;
   company_name: string;
   organization_id: string;
-  status: "PENDING" | "APPROVED" | "REJECTED";
+  status: "EMAIL_VERIFICATION_PENDING" | "PENDING" | "APPROVED" | "REJECTED";
   created_at: string;
 }
 
@@ -430,7 +430,7 @@ export default function UsersPage() {
                     <label className="grid gap-1 text-xs font-medium text-muted-foreground">
                       Role
                       <select
-                        className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                        className="h-9 rounded-md border border-input bg-background px-3 text-sm text-foreground disabled:opacity-60"
                         value={approval.role}
                         onChange={(event) => setApprovalState(request.id, { role: event.target.value, branch: "" })}
                       >

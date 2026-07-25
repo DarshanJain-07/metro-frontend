@@ -4,23 +4,23 @@ import { cookies } from "next/headers";
 import { NextResponse } from "next/server";
 
 import {
-  ACCESS_TOKEN_MAX_AGE_SECONDS,
   ACTIVE_CONTEXT_MAX_AGE_SECONDS,
+  AUTH_HEADER_NAMES,
   AUTH_COOKIE_NAMES,
-  REFRESH_TOKEN_MAX_AGE_SECONDS,
+  WORKOS_SESSION_MAX_AGE_SECONDS,
   getCookieSecurityOptions,
 } from "@/lib/auth-cookies";
 import type { AuthSession, Membership, User } from "@/lib/auth-types";
 
 type BackendFetchResult = {
   response: Response;
-  refreshedTokens?: AuthTokenPayload;
+  refreshedSession?: string;
   shouldClearAuth?: boolean;
 };
 
-type AuthTokenPayload = {
-  access: string;
-  refresh?: string;
+type AuthSessionCookiePayload = {
+  session: string;
+  maxAge?: number;
 };
 
 type BackendFetchOptions = {
@@ -78,7 +78,7 @@ export function getBackendUrl(path: string, search = "") {
 
 function createForwardHeaders(
   incomingHeaders: HeadersInit | undefined,
-  token?: string,
+  session?: string,
 ) {
   const headers = new Headers(incomingHeaders);
 
@@ -88,9 +88,11 @@ function createForwardHeaders(
 
   headers.delete("authorization");
   headers.delete("cookie");
+  headers.delete(AUTH_HEADER_NAMES.workosSession);
+  headers.delete(AUTH_HEADER_NAMES.refreshedWorkosSession);
 
-  if (token) {
-    headers.set("Authorization", `Bearer ${token}`);
+  if (session) {
+    headers.set(AUTH_HEADER_NAMES.workosSession, session);
   }
 
   return headers;
@@ -100,8 +102,7 @@ async function getAuthCookieSnapshot() {
   const cookieStore = await cookies();
 
   return {
-    accessToken: cookieStore.get(AUTH_COOKIE_NAMES.accessToken)?.value || null,
-    refreshToken: cookieStore.get(AUTH_COOKIE_NAMES.refreshToken)?.value || null,
+    workosSession: cookieStore.get(AUTH_COOKIE_NAMES.workosSession)?.value || null,
     activeMembershipId:
       cookieStore.get(AUTH_COOKIE_NAMES.activeMembershipId)?.value || null,
     activeCompanyId:
@@ -127,10 +128,10 @@ function attachActiveContextHeaders(
 export async function backendFetch(
   path: string,
   options: BackendFetchOptions = {},
-  token?: string | null,
+  session?: string | null,
 ) {
   const url = getBackendUrl(path, options.search);
-  const headers = createForwardHeaders(options.headers, token || undefined);
+  const headers = createForwardHeaders(options.headers, session || undefined);
 
   return fetch(url, {
     body: options.body,
@@ -140,24 +141,6 @@ export async function backendFetch(
   });
 }
 
-async function refreshAccessToken(refreshToken: string) {
-  const response = await backendFetch("/api/v1/auth/token/refresh/", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ refresh: refreshToken }),
-  });
-
-  if (!response.ok) return null;
-
-  const payload = (await response.json().catch(() => null)) as
-    | AuthTokenPayload
-    | null;
-
-  return payload?.access ? payload : null;
-}
-
 export async function fetchBackendWithCookieAuth(
   path: string,
   options: BackendFetchOptions = {},
@@ -165,31 +148,11 @@ export async function fetchBackendWithCookieAuth(
   const snapshot = await getAuthCookieSnapshot();
   const headers = createForwardHeaders(
     options.headers,
-    snapshot.accessToken || undefined,
+    snapshot.workosSession || undefined,
   );
   attachActiveContextHeaders(headers, snapshot);
 
-  let response = await fetch(getBackendUrl(path, options.search), {
-    body: options.body,
-    cache: "no-store",
-    headers,
-    method: options.method || "GET",
-  });
-
-  if (response.status !== 401 || !snapshot.refreshToken) {
-    return {
-      response,
-      shouldClearAuth: response.status === 401,
-    };
-  }
-
-  const refreshedTokens = await refreshAccessToken(snapshot.refreshToken);
-  if (!refreshedTokens) {
-    return { response, shouldClearAuth: true };
-  }
-
-  headers.set("Authorization", `Bearer ${refreshedTokens.access}`);
-  response = await fetch(getBackendUrl(path, options.search), {
+  const response = await fetch(getBackendUrl(path, options.search), {
     body: options.body,
     cache: "no-store",
     headers,
@@ -198,7 +161,7 @@ export async function fetchBackendWithCookieAuth(
 
   return {
     response,
-    refreshedTokens,
+    refreshedSession: response.headers.get(AUTH_HEADER_NAMES.refreshedWorkosSession) || undefined,
     shouldClearAuth: response.status === 401,
   };
 }
@@ -209,27 +172,21 @@ export function filterResponseHeaders(source: Headers) {
   for (const headerName of HOP_BY_HOP_HEADERS) {
     headers.delete(headerName);
   }
+  headers.delete(AUTH_HEADER_NAMES.refreshedWorkosSession);
+  headers.delete(AUTH_HEADER_NAMES.workosSession);
 
   return headers;
 }
 
 export function setAuthCookies(
   response: NextResponse,
-  payload: AuthTokenPayload,
+  payload: AuthSessionCookiePayload,
 ) {
   response.cookies.set(
-    AUTH_COOKIE_NAMES.accessToken,
-    payload.access,
-    getCookieSecurityOptions(ACCESS_TOKEN_MAX_AGE_SECONDS),
+    AUTH_COOKIE_NAMES.workosSession,
+    payload.session,
+    getCookieSecurityOptions(payload.maxAge || WORKOS_SESSION_MAX_AGE_SECONDS),
   );
-
-  if (payload.refresh) {
-    response.cookies.set(
-      AUTH_COOKIE_NAMES.refreshToken,
-      payload.refresh,
-      getCookieSecurityOptions(REFRESH_TOKEN_MAX_AGE_SECONDS),
-    );
-  }
 }
 
 export function clearAuthCookies(response: NextResponse) {
@@ -319,5 +276,5 @@ export async function getServerAuthSession(): Promise<AuthSession> {
 
 export async function hasAuthCookies() {
   const snapshot = await getAuthCookieSnapshot();
-  return Boolean(snapshot.accessToken || snapshot.refreshToken);
+  return Boolean(snapshot.workosSession);
 }

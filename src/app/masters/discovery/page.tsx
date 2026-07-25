@@ -34,6 +34,13 @@ type CompanyOffice = {
   global_office: string | null;
 };
 
+type DirectoryCompany = {
+  id: number | string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+};
+
 type DiscoveredCompany = {
   id: string;
   name: string;
@@ -88,7 +95,12 @@ export default function DiscoveryPage() {
   const discoveryQuery = useQuery({
     queryKey: discoveryQueryKey,
     queryFn: async ({ signal }) => {
-      const [globalRecords, officeRecords] = await Promise.all([
+      const [companyRecords, globalRecords, officeRecords] = await Promise.all([
+        fetchAllPages<DirectoryCompany>(
+          "/api/v1/master/companies/?include_inactive=false&ordering=name&page_size=1000",
+          "Could not load company directory.",
+          signal,
+        ),
         fetchAllPages<GlobalOffice>(
           "/api/v1/master/global-offices/?include_inactive=false&ordering=name&page_size=1000",
           "Could not load discovery directory.",
@@ -102,16 +114,19 @@ export default function DiscoveryPage() {
       ]);
 
       return {
+        directoryCompanies: companyRecords || [],
         globalOffices: globalRecords || [],
         currentOffices: officeRecords || [],
       };
     },
     initialData: {
+      directoryCompanies: [] as DirectoryCompany[],
       globalOffices: [] as GlobalOffice[],
       currentOffices: [] as CompanyOffice[],
     },
   });
 
+  const directoryCompanies = discoveryQuery.data.directoryCompanies;
   const globalOffices = discoveryQuery.data.globalOffices;
   const currentOffices = discoveryQuery.data.currentOffices;
 
@@ -124,6 +139,17 @@ export default function DiscoveryPage() {
 
   const companies = useMemo(() => {
     const grouped = new Map<string, DiscoveredCompany>();
+
+    for (const company of directoryCompanies) {
+      const companyId = String(company.id);
+      if (activeCompanyId && companyId === activeCompanyId) continue;
+      grouped.set(companyId, {
+        id: companyId,
+        name: company.name,
+        offices: [],
+        importedCount: 0,
+      });
+    }
 
     for (const office of globalOffices) {
       if (!office.owner_company || !office.owner_company_name) continue;
@@ -144,10 +170,17 @@ export default function DiscoveryPage() {
     }
 
     return Array.from(grouped.values())
-      .map((company) => ({
-        ...company,
-        importedCount: company.offices.filter((office) => importedGlobalOfficeIds.has(office.id)).length,
-      }))
+      .map((company) => {
+        const offices = [...company.offices].sort((a, b) => {
+          const locationCompare = officeLocation(a).localeCompare(officeLocation(b));
+          return locationCompare || a.name.localeCompare(b.name);
+        });
+        return {
+          ...company,
+          offices,
+          importedCount: offices.filter((office) => importedGlobalOfficeIds.has(office.id)).length,
+        };
+      })
       .filter((company) => {
         const query = searchQuery.trim().toLowerCase();
         if (!query) return true;
@@ -161,7 +194,7 @@ export default function DiscoveryPage() {
         );
       })
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [activeCompanyId, globalOffices, importedGlobalOfficeIds, searchQuery]);
+  }, [activeCompanyId, directoryCompanies, globalOffices, importedGlobalOfficeIds, searchQuery]);
 
   const importCompanyMutation = useMutation({
     mutationFn: async (company: DiscoveredCompany) => {
@@ -226,7 +259,9 @@ export default function DiscoveryPage() {
           <div className="min-w-0">
             <div className="truncate">{company.name}</div>
             <div className="text-xs font-medium text-muted-foreground">
-              {company.offices.length} office{company.offices.length === 1 ? "" : "s"} available
+              {company.offices.length
+                ? `${company.offices.length} office${company.offices.length === 1 ? "" : "s"} available`
+                : "No offices listed yet"}
             </div>
           </div>
         </div>
@@ -236,17 +271,22 @@ export default function DiscoveryPage() {
       header: "Coverage",
       render: (_, company) => {
         const locations = Array.from(new Set(company.offices.map(officeLocation).filter(Boolean))).slice(0, 3);
-        return locations.length ? locations.join(" | ") : "No location listed";
+        return locations.length ? locations.join(" | ") : "Company listed";
       },
       width: "320px",
     },
     {
       header: "Imported",
-      render: (_, company) => (
-        <Badge variant={company.importedCount === company.offices.length ? "success" : "secondary"}>
-          {company.importedCount}/{company.offices.length}
-        </Badge>
-      ),
+      render: (_, company) => {
+        if (company.offices.length === 0) {
+          return <Badge variant="secondary">No offices</Badge>;
+        }
+        return (
+          <Badge variant={company.importedCount === company.offices.length ? "success" : "secondary"}>
+            {company.importedCount}/{company.offices.length}
+          </Badge>
+        );
+      },
       width: "120px",
     },
   ];
@@ -278,22 +318,23 @@ export default function DiscoveryPage() {
           actions={
             canImport
               ? (company) => {
-                  const allImported = company.importedCount === company.offices.length;
+                  const hasOffices = company.offices.length > 0;
+                  const allImported = hasOffices && company.importedCount === company.offices.length;
                   const isImporting =
                     importCompanyMutation.isPending &&
                     importCompanyMutation.variables?.id === company.id;
                   return (
                     <Button
                       size="sm"
-                      variant={allImported ? "outline" : "default"}
-                      disabled={allImported || isImporting}
+                      variant={!hasOffices || allImported ? "outline" : "default"}
+                      disabled={!hasOffices || allImported || isImporting}
                       onClick={(event) => {
                         event.stopPropagation();
                         importCompanyMutation.mutate(company);
                       }}
                     >
                       {isImporting ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-                      {allImported ? "Imported" : "Import"}
+                      {!hasOffices ? "No offices" : allImported ? "Imported" : "Import"}
                     </Button>
                   );
                 }
@@ -308,9 +349,11 @@ export default function DiscoveryPage() {
             </div>
             <div className="text-xs font-medium text-muted-foreground">
               {expandedCompany
-                ? canImport
-                  ? "Import selected offices into your current organization."
-                  : "External offices available in the discovery directory."
+                ? expandedCompany.offices.length === 0
+                  ? "This company has no offices listed yet."
+                  : canImport
+                    ? "Import selected offices into your current organization."
+                    : "External offices available in the discovery directory."
                 : "Select a company to view offices."}
             </div>
           </div>
@@ -319,6 +362,10 @@ export default function DiscoveryPage() {
             {!expandedCompany ? (
               <div className="py-16 text-center text-sm font-medium text-muted-foreground">
                 No company selected.
+              </div>
+            ) : expandedCompany.offices.length === 0 ? (
+              <div className="py-16 text-center text-sm font-medium text-muted-foreground">
+                No offices listed yet.
               </div>
             ) : (
               <div className="space-y-2">

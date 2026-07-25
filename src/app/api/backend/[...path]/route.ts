@@ -64,8 +64,8 @@ async function proxyBackendRequest(request: NextRequest) {
     statusText: result.response.statusText,
   });
 
-  if (result.refreshedTokens) {
-    setAuthCookies(response, result.refreshedTokens);
+  if (result.refreshedSession) {
+    setAuthCookies(response, { session: result.refreshedSession });
   }
 
   if (result.shouldClearAuth) {

@@ -19,6 +19,7 @@ export interface SidebarItem {
   label: string;
   href: string;
   permissions: Permission[];
+  ownerOnly?: boolean;
 }
 
 export interface SidebarGroup {
@@ -56,6 +57,7 @@ export const sidebarGroups: SidebarGroup[] = [
     title: "ADMIN",
     items: [
       { icon: User, label: "Users & Roles", href: "/admin/users", permissions: ["users:view", "roles:manage"] },
+      { icon: Building2, label: "Clients", href: "/admin/clients", permissions: [], ownerOnly: true },
     ],
   },
   {
@@ -80,4 +82,15 @@ export function getRequiredPermissions(pathname: string): Permission[] | null {
   }
 
   return null;
+}
+
+export function isOwnerOnlyPath(pathname: string) {
+  for (const group of sidebarGroups) {
+    for (const item of group.items) {
+      if (item.ownerOnly && (item.href === pathname || pathname.startsWith(item.href + "/"))) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
