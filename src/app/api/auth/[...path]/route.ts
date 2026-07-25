@@ -112,6 +112,43 @@ async function readJsonPayload(response: Response) {
   return response.json().catch(() => null);
 }
 
+function payloadKeys(payload: unknown) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return [];
+  }
+
+  return Object.keys(payload).sort();
+}
+
+function logAuthProxyBackendResult({
+  payload,
+  request,
+  response,
+  routeKey,
+}: {
+  payload: unknown;
+  request: NextRequest;
+  response: Response;
+  routeKey: string;
+}) {
+  if (response.ok && response.status < 500) return;
+
+  console.error("Auth proxy backend response", {
+    contentType: response.headers.get("content-type"),
+    hasRefreshedSessionHeader: Boolean(
+      response.headers.get(AUTH_HEADER_NAMES.refreshedWorkosSession),
+    ),
+    payloadKeys: payloadKeys(payload),
+    requestId:
+      request.headers.get("x-request-id") ||
+      response.headers.get("x-request-id") ||
+      null,
+    routeKey,
+    status: response.status,
+    statusText: response.statusText,
+  });
+}
+
 async function revokeWorkosSession(session: string) {
   try {
     const response = await backendFetch(
@@ -242,6 +279,12 @@ async function handleMappedAuthRoute(
       };
 
   const payload = await readJsonPayload(authResult.response);
+  logAuthProxyBackendResult({
+    payload,
+    request,
+    response: authResult.response,
+    routeKey,
+  });
 
   if (authResult.response.status === 202 && isPendingAuthPayload(payload)) {
     return jsonResponse(payload, { status: 202 });
@@ -266,6 +309,17 @@ async function handleMappedAuthRoute(
       AUTH_HEADER_NAMES.refreshedWorkosSession,
     );
     if (!sealedSession || !sessionPayload.user) {
+      console.error("Auth proxy incomplete session response", {
+        hasRefreshedSessionHeader: Boolean(sealedSession),
+        hasUser: Boolean(sessionPayload.user),
+        payloadKeys: payloadKeys(payload),
+        requestId:
+          request.headers.get("x-request-id") ||
+          authResult.response.headers.get("x-request-id") ||
+          null,
+        routeKey,
+        status: authResult.response.status,
+      });
       return NextResponse.json(
         { detail: "Auth response did not include a complete session payload." },
         { status: 502 },
