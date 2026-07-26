@@ -1,7 +1,7 @@
 import { cacheLife, cacheTag } from "next/cache";
 import { z } from "zod";
 
-import { getBackendUrl } from "@/lib/server-auth";
+import { getBackendUrl } from "@/lib/backend-url";
 
 const CitySchema = z.object({
   id: z.string(),

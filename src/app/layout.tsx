@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import localFont from "next/font/local";
 import { Suspense } from "react";
-import { dehydrate } from "@tanstack/react-query";
 import "./globals.css";
 import { cn } from "@/lib/utils";
 import { Toaster } from "@/components/ui/sonner";
@@ -10,10 +9,7 @@ import { AppShell } from "@/components/app-shell";
 import { AppSkeleton } from "@/components/app-skeleton";
 import { PwaRegister } from "@/components/pwa-register";
 import { AuthProvider } from "@/lib/auth-context";
-import { authKeys } from "@/lib/query-keys";
-import { makeQueryClient } from "@/lib/query-client";
 import { QueryProvider } from "@/lib/query-provider";
-import { getServerAuthSession, hasAuthCookies } from "@/lib/server-auth";
 
 const inter = localFont({
   src: [
@@ -54,20 +50,9 @@ export const metadata: Metadata = {
   },
 };
 
-async function HydratedApp({ children }: { children: React.ReactNode }) {
-  const queryClient = makeQueryClient();
-
-  if (await hasAuthCookies()) {
-    await queryClient
-      .prefetchQuery({
-        queryKey: authKeys.session(),
-        queryFn: getServerAuthSession,
-      })
-      .catch(() => undefined);
-  }
-
+function HydratedApp({ children }: { children: React.ReactNode }) {
   return (
-    <QueryProvider dehydratedState={dehydrate(queryClient)}>
+    <QueryProvider>
       <AuthProvider>
         <PwaRegister />
         <AppShell>{children}</AppShell>
